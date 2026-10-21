@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0a0d0b">
+  <title>管理员后台 | 骗子酒馆</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/styles.css?v=15">
+  <link rel="stylesheet" href="/admin.css?v=15">
+</head>
+<body class="admin-body">
+  <div class="ambient ambient-one"></div>
+  <div class="ambient ambient-two"></div>
+  <div class="grain"></div>
+
+  <header class="topbar">
+    <a class="brand" href="/" aria-label="返回牌桌">
+      <span class="brand-mark">♠</span>
+      <span class="brand-text">骗子酒馆<small>ADMIN CONSOLE</small></span>
+    </a>
+    <div class="topbar-actions">
+      <a class="text-button" href="/">返回牌桌</a>
+      <button class="text-button accent" id="logout-button" type="button" hidden>退出登录</button>
+    </div>
+  </header>
+
+  <main class="admin-main">
+    <section class="admin-login" id="login-view">
+      <div class="login-card">
+        <span class="modal-kicker">RESTRICTED ACCESS</span>
+        <h1>管理员后台</h1>
+        <p>管理 AI 角色、模型接口、密钥和头像。玩家端只能选择这里已启用的角色。</p>
+        <form id="login-form">
+          <label for="admin-password">管理员密码</label>
+          <input id="admin-password" type="password" autocomplete="current-password" placeholder="输入管理员密码">
+          <button class="primary-button full" type="submit">进入后台</button>
+        </form>
+      </div>
+    </section>
+
+    <section class="admin-dashboard" id="dashboard-view" hidden>
+      <div class="admin-heading">
+        <div>
+          <span class="modal-kicker">AI PERSONAS</span>
+          <h1>AI 角色管理</h1>
+          <p>每局只能从已启用的角色中选择。API Key 只保存在服务端配置文件，后台仅显示掩码。</p>
+        </div>
+        <div class="admin-heading-actions">
+          <button class="secondary-button" id="password-button" type="button">修改密码</button>
+          <button class="primary-button" id="add-role-button" type="button">新增 AI 角色</button>
+        </div>
+      </div>
+      <div class="admin-stats">
+        <div><span id="role-count">0</span><small>全部角色</small></div>
+        <div><span id="enabled-count">0</span><small>已启用</small></div>
+        <div><span id="key-count">0</span><small>已配置密钥</small></div>
+      </div>
+      <section class="admin-music-panel">
+        <div class="admin-music-head">
+          <div>
+            <span class="modal-kicker">ATMOSPHERE</span>
+            <strong>游戏背景音乐</strong>
+            <p>支持站内路径、HTTPS 音频 URL，或直接上传 MP3/WAV/OGG。建议文件不超过 8MB。</p>
+          </div>
+          <label class="checkbox-row"><input id="music-enabled" type="checkbox"> 启用背景音乐</label>
+        </div>
+        <div class="admin-music-grid">
+          <label class="wide">音频 URL<input id="music-url" spellcheck="false" placeholder="https://example.com/theme.mp3 或 /music/theme.mp3"></label>
+          <label>上传音频<input id="music-file" type="file" accept="audio/mpeg,audio/mp3,audio/wav,audio/ogg,audio/webm,audio/mp4"></label>
+          <label class="music-volume-label">音量 <output id="music-volume-value">35%</output><input id="music-volume" type="range" min="0" max="80" step="1" value="35"></label>
+        </div>
+        <div class="admin-music-footer">
+          <audio id="music-preview" controls preload="none"></audio>
+          <span id="music-file-status">尚未选择文件</span>
+          <button class="ghost-button danger-text" id="clear-music" type="button">移除音乐</button>
+          <button class="primary-button" id="save-music" type="button">保存音乐设置</button>
+        </div>
+      </section>
+      <section class="admin-danger-zone">
+        <div>
+          <span class="modal-kicker">DANGER ZONE</span>
+          <strong>重置排行榜与用户</strong>
+          <p>清空上海、杭州两个账户的当前用户名、全部战绩，以及 AI 胜率统计。登录密钥不会改变。</p>
+        </div>
+        <button class="ghost-button danger-text" id="reset-leaderboard" type="button">清空并重置</button>
+      </section>
+      <div class="admin-role-grid" id="role-grid"></div>
+    </section>
+  </main>
+
+  <dialog class="modal role-modal" id="role-dialog">
+    <div class="modal-head">
+      <div>
+        <span class="modal-kicker">AI PROFILE</span>
+        <h2 id="role-dialog-title">编辑 AI 角色</h2>
+      </div>
+      <button class="close-button" id="role-dialog-close" type="button">×</button>
+    </div>
+    <div class="role-editor">
+      <div class="avatar-editor">
+        <div class="avatar-preview" id="avatar-preview">🎲</div>
+        <div class="avatar-controls">
+          <label class="upload-button">上传头像<input id="avatar-file" type="file" accept="image/png,image/jpeg,image/webp"></label>
+          <label>或使用 Emoji<input id="role-avatar-emoji" maxlength="8" placeholder="🎲"></label>
+          <button class="inline-link" id="remove-avatar" type="button">清除上传图片</button>
+        </div>
+      </div>
+      <div class="portrait-editor">
+        <div class="portrait-preview" id="portrait-preview">立绘</div>
+        <div class="avatar-controls">
+          <label class="upload-button">上传人物立绘<input id="portrait-file" type="file" accept="image/png,image/jpeg,image/webp"></label>
+          <button class="inline-link" id="reset-portrait" type="button">恢复默认立绘</button>
+          <small class="field-note">建议使用 3:4 竖图，人物上半身或全身，保存时自动压缩。</small>
+        </div>
+      </div>
+      <div class="role-form-grid">
+        <label>角色名称<input id="role-name" maxlength="24" placeholder="DeepSeek"></label>
+        <label>供应商
+          <select id="role-provider">
+            <option value="openai">OpenAI 兼容</option>
+            <option value="anthropic">Anthropic</option>
+            <option value="gemini">Gemini</option>
+          </select>
+        </label>
+        <label class="wide">接口 URL<input id="role-base-url" spellcheck="false" placeholder="https://api.deepseek.com/v1"></label>
+        <label>模型名称<input id="role-model" spellcheck="false" placeholder="deepseek-chat"></label>
+        <label>API Key<input id="role-api-key" type="password" spellcheck="false" autocomplete="off" placeholder="留空则不修改"><small id="key-status"></small></label>
+        <label class="wide">AI 提示词<textarea id="role-prompt" rows="6" maxlength="4000" placeholder="描述这个 AI 的性格、策略、说话方式和行为偏好"></textarea></label>
+        <label class="checkbox-row wide"><input id="role-clear-key" type="checkbox"> 清除已保存的 API Key</label>
+        <label class="checkbox-row wide"><input id="role-enabled" type="checkbox" checked> 允许玩家在牌局中选择此角色</label>
+      </div>
+    </div>
+    <div class="modal-actions role-modal-actions">
+      <button class="ghost-button danger-text" id="delete-role" type="button">删除角色</button>
+      <span class="spacer"></span>
+      <button class="secondary-button" id="cancel-role" type="button">取消</button>
+      <button class="primary-button" id="save-role" type="button">保存</button>
+    </div>
+  </dialog>
+
+  <dialog class="modal password-modal" id="password-dialog">
+    <div class="modal-head">
+      <div>
+        <span class="modal-kicker">SECURITY</span>
+        <h2>修改管理员密码</h2>
+      </div>
+      <button class="close-button" id="password-dialog-close" type="button">×</button>
+    </div>
+    <div class="password-form">
+      <label>当前密码<input id="current-password" type="password" autocomplete="current-password"></label>
+      <label>新密码<input id="new-password" type="password" autocomplete="new-password" placeholder="至少 8 个字符"></label>
+      <label>确认新密码<input id="confirm-password" type="password" autocomplete="new-password"></label>
+    </div>
+    <div class="modal-actions">
+      <button class="secondary-button" id="cancel-password" type="button">取消</button>
+      <button class="primary-button" id="save-password" type="button">更新密码</button>
+    </div>
+  </dialog>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <script src="/admin.js?v=15" defer></script>
+</body>
+</html>

@@ -1,0 +1,264 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0a0d0b">
+  <title>骗子酒馆 | LIARS BAR</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/styles.css?v=15">
+</head>
+<body>
+  <div class="ambient ambient-one"></div>
+  <div class="ambient ambient-two"></div>
+  <div class="grain"></div>
+
+  <header class="topbar">
+    <button class="brand" id="home-link" type="button" aria-label="返回首页">
+      <span class="brand-mark">♠</span>
+      <span class="brand-text">骗子酒馆<small>LIARS BAR</small></span>
+    </button>
+    <div class="topbar-actions">
+      <span class="connection-pill" id="connection-pill"><i></i> 本地牌局</span>
+      <button class="text-button" id="rules-button" type="button">规则</button>
+      <button class="text-button" id="leaderboard-button" type="button">排行榜</button>
+      <button class="text-button accent" id="settings-button" type="button">AI 阵容</button>
+    </div>
+  </header>
+
+  <main>
+    <section class="view home-view" id="home-view">
+      <div class="home-hero">
+        <div class="eyebrow">A GAME OF LIES, LUCK AND BULLETS</div>
+        <h1>骗子<span>酒馆</span></h1>
+        <p class="hero-copy">J、Q、K 各六张，大小王当万能牌。<br>你可以说真话，但没人会相信你。</p>
+        <div class="hero-chips">
+          <span>20 张特制牌</span>
+          <span>上海 / 杭州双城账户</span>
+          <span>AI 自动补位</span>
+          <span>摄像头 P2P</span>
+        </div>
+        <div class="hero-deck" aria-hidden="true">
+          <div class="show-card show-card-back">🃏</div>
+          <div class="show-card show-card-mid"><b>Q</b><em>♥</em></div>
+          <div class="show-card show-card-front"><b>J</b><em>♠</em></div>
+        </div>
+      </div>
+
+      <div class="home-panel">
+        <div class="panel-heading">
+          <span>账户登录</span>
+          <small>ONE TABLE · FIXED ACCOUNTS</small>
+        </div>
+        <form id="login-form" class="stack-form">
+          <label for="login-location">选择地点账户</label>
+          <select id="login-location">
+            <option value="shanghai">上海账户</option>
+            <option value="hangzhou">杭州账户</option>
+          </select>
+          <label for="login-key" class="field-gap">账户密钥</label>
+          <input id="login-key" type="password" autocomplete="current-password" spellcheck="false" placeholder="输入该账户的登录密钥">
+          <button class="primary-button full login-submit" type="submit">登录并进入主桌</button>
+        </form>
+
+        <section class="account-panel" id="account-panel" hidden>
+          <div class="account-identity">
+            <span id="account-location">上海</span>
+            <strong id="account-name">待命名</strong>
+          </div>
+          <p id="account-hint">主桌只有一张，空位由 AI 补齐。</p>
+          <div class="account-actions">
+            <button class="primary-button" id="enter-table" type="button">进入主桌</button>
+            <button class="secondary-button" id="change-name" type="button">更换用户名</button>
+            <button class="ghost-button" id="account-leaderboard" type="button">排行榜</button>
+            <button class="ghost-button" id="logout-account" type="button">退出登录</button>
+          </div>
+        </section>
+
+        <div class="model-summary" id="model-summary">
+          <span class="summary-dot"></span>
+          <span id="model-summary-text">正在读取管理员配置的 AI 阵容</span>
+          <button class="inline-link" id="summary-settings" type="button">查看</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="view room-view" id="room-view" hidden>
+      <div class="room-toolbar">
+        <div class="room-code-block">
+          <span>牌桌</span>
+          <strong id="room-code-label">主桌</strong>
+          <button class="copy-button" id="copy-code" type="button" title="复制房间码" hidden>复制</button>
+        </div>
+        <div class="room-status" id="room-status">等待入座</div>
+        <span class="turn-clock" id="turn-clock" hidden>30s</span>
+        <div class="room-actions">
+          <button class="toolbar-button active" id="voice-toggle" type="button"><span>🔊</span> 语音开</button>
+          <button class="toolbar-button" id="music-toggle" type="button" hidden><span>♫</span> 音乐开</button>
+          <button class="toolbar-button" id="camera-toggle" type="button"><span>◉</span> 开启摄像头</button>
+          <button class="toolbar-button danger" id="leave-button" type="button">离开主桌</button>
+        </div>
+      </div>
+
+      <div class="room-grid">
+        <div class="table-column">
+          <div class="table-stage" id="table-stage">
+            <div class="table-shadow"></div>
+            <div class="table-felt">
+              <div class="felt-ring felt-ring-outer"></div>
+              <div class="felt-ring felt-ring-inner"></div>
+              <div class="table-mark">LIARS BAR<small>EST. 1926</small></div>
+              <div id="center-panel" class="center-panel"></div>
+            </div>
+            <div id="seat-layer" class="seat-layer"></div>
+            <div class="ai-mind-panel" id="ai-mind-panel" aria-live="polite" hidden>
+              <div class="ai-mind-content">
+                <div class="ai-mind-head">
+                  <strong id="ai-mind-name">AI</strong>
+                  <span id="ai-mind-status">正在观察牌桌</span>
+                </div>
+                <div class="ai-mind-text" id="ai-mind-text"></div>
+                <div class="ai-mind-decision" id="ai-mind-decision" hidden></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="camera-dock" id="camera-dock" hidden>
+            <div class="camera-tile camera-local">
+              <video id="local-video" autoplay muted playsinline></video>
+              <span class="camera-label">你</span>
+              <div class="camera-placeholder" id="local-placeholder">摄像头未开启</div>
+            </div>
+            <div class="camera-tile camera-remote">
+              <video id="remote-video" autoplay playsinline></video>
+              <span class="camera-label" id="remote-label">对家</span>
+              <div class="camera-placeholder" id="remote-placeholder">等待另一位真人玩家</div>
+            </div>
+          </div>
+
+          <div class="action-dock">
+            <div id="lineup-panel" class="lineup-panel" hidden></div>
+            <div class="hand-heading">
+              <span>你的手牌</span>
+              <small id="hand-hint">选择 1 到 3 张牌</small>
+            </div>
+            <div id="hand-row" class="hand-row"></div>
+            <div id="action-bar" class="action-bar"></div>
+          </div>
+          <div id="round-thoughts" class="round-thoughts round-thoughts-under" hidden></div>
+        </div>
+
+        <aside class="side-panel" hidden>
+          <div class="side-heading">
+            <div>
+              <span>牌桌记录</span>
+              <small id="round-label">等待开局</small>
+            </div>
+            <span class="live-dot"></span>
+          </div>
+          <div id="feed-list" class="feed-list"></div>
+          <form id="chat-form" class="chat-form">
+            <input id="chat-input" maxlength="100" autocomplete="off" placeholder="说点什么...">
+            <button type="submit" aria-label="发送">↑</button>
+          </form>
+        </aside>
+      </div>
+
+      <div class="table-fx" id="table-fx" role="status" aria-live="assertive" aria-hidden="true"></div>
+
+    </section>
+  </main>
+
+  <dialog class="modal" id="settings-dialog">
+    <div class="modal-head">
+      <div>
+        <span class="modal-kicker">AI ROSTER</span>
+        <h2>本局 AI 阵容</h2>
+      </div>
+      <button class="close-button" data-close-dialog="settings-dialog" type="button">×</button>
+    </div>
+    <p class="modal-copy">AI 角色、模型、密钥和头像由管理员统一配置。玩家只能从管理员已启用的角色中选择本局阵容，开局前可在等待界面调整。</p>
+    <div id="ai-roster-list" class="ai-roster-list"></div>
+    <div class="modal-actions">
+      <a class="secondary-button admin-link" href="/admin.html" target="_blank" rel="noopener">管理员后台</a>
+      <button class="secondary-button" data-close-dialog="settings-dialog" type="button">完成</button>
+    </div>
+  </dialog>
+
+  <dialog class="modal rules-modal" id="rules-dialog">
+    <div class="modal-head">
+      <div>
+        <span class="modal-kicker">HOUSE RULES</span>
+        <h2>骗子酒馆规则</h2>
+      </div>
+      <button class="close-button" data-close-dialog="rules-dialog" type="button">×</button>
+    </div>
+    <div class="rules-grid">
+      <article><b>01</b><h3>四席牌局</h3><p>最多两位真人玩家，其余席位由 AI 补齐。也可以 0 位真人，围观四个 AI 互相欺骗。</p></article>
+      <article><b>02</b><h3>二十张牌</h3><p>J、Q、K 各 6 张，加大小王两张万能牌。每轮公开一个 J/Q/K 桌面点数，万能牌可当任意点数。</p></article>
+      <article><b>03</b><h3>出牌与说谎</h3><p>每回合选择 1 到 3 张牌扣在桌上。你可以说真话，也可以面不改色地撒谎；含万能牌的亮牌永远算真。</p></article>
+      <article><b>04</b><h3>质疑亮牌</h3><p>质疑上一位玩家。若对方说谎，对方扣扳机；若对方说真话，质疑者扣扳机。</p></article>
+      <article><b>05</b><h3>俄罗斯轮盘</h3><p>每把左轮有 3 个弹仓、1 发子弹，每次扣扳机约有 1/3 概率中弹出局；空枪则继续。</p></article>
+      <article><b>06</b><h3>连续牌局</h3><p>枪响或质疑后不会重新发牌。手牌打空后只能质疑；全部手牌耗尽，或只剩一名玩家存活时，牌局才结束。</p></article>
+    </div>
+    <div class="privacy-note"><span>◉</span> 摄像头视频仅在两位真人浏览器之间通过 WebRTC 点对点传输，不录制、不落盘。</div>
+    <div class="modal-actions"><button class="secondary-button" data-close-dialog="rules-dialog" type="button">明白了</button></div>
+  </dialog>
+
+  <dialog class="modal username-modal" id="username-dialog">
+    <div class="modal-head">
+      <div>
+        <span class="modal-kicker">PLAYER IDENTITY</span>
+        <h2>设置用户名</h2>
+      </div>
+      <button class="close-button" id="username-close" data-close-dialog="username-dialog" type="button">×</button>
+    </div>
+    <p class="modal-copy" id="username-reason">用户名会自动加上地点前缀，并且不能与另一位玩家重复。</p>
+    <form id="username-form" class="stack-form">
+      <label for="username-input">用户名</label>
+      <div class="name-prefix-field">
+        <span id="username-location">上海 ·</span>
+        <input id="username-input" maxlength="16" autocomplete="nickname" placeholder="输入新用户名">
+      </div>
+      <div class="modal-actions">
+        <button class="ghost-button" id="username-cancel" data-close-dialog="username-dialog" type="button">取消</button>
+        <button class="primary-button" type="submit">确认用户名</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog class="modal leaderboard-modal" id="leaderboard-dialog">
+    <div class="modal-head">
+      <div>
+        <span class="modal-kicker">HALL OF LIES</span>
+        <h2>排行榜</h2>
+      </div>
+      <button class="close-button" data-close-dialog="leaderboard-dialog" type="button">×</button>
+    </div>
+    <div class="board-tabs" id="board-tabs">
+      <button type="button" data-board="deception" class="active">成功欺骗</button>
+      <button type="button" data-board="kills">成功击杀</button>
+      <button type="button" data-board="streak">连续获胜</button>
+      <button type="button" data-board="ai">AI 胜率</button>
+    </div>
+    <div class="leaderboard-body" id="leaderboard-body">正在读取排行榜...</div>
+  </dialog>
+
+  <dialog class="victory-modal" id="victory-dialog">
+    <div class="victory-rays"></div>
+    <div class="victory-crown">♛</div>
+    <span class="victory-kicker">WINNER · FINAL TABLE</span>
+    <div class="victory-portrait" id="victory-portrait">♠</div>
+    <h2 id="victory-name">胜者</h2>
+    <p id="victory-result">牌局结束</p>
+    <div class="victory-ranking" id="victory-ranking"></div>
+    <button class="primary-button victory-continue" id="victory-continue" type="button">查看牌桌</button>
+    <span class="victory-countdown" id="victory-countdown">6s</span>
+  </dialog>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <audio id="bgm-audio" loop preload="none"></audio>
+
+  <script src="/app.js?v=15" defer></script>
+</body>
+</html>

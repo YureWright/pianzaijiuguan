@@ -1,0 +1,14 @@
+{
+  "name": "liars-bar-mvp",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Liars Bar local multiplayer MVP with AI seats and configurable models",
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node --watch server/index.js",
+    "test": "node --test test/game.test.js test/ai.test.js test/admin.test.js test/accounts.test.js"
+  },
+  "engines": {
+    "node": ">=18.17"
+  }
+}
