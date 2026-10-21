@@ -7,6 +7,9 @@
   <title>骗子酒馆 | LIARS BAR</title>
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/styles.css?v=15">
+  <link rel="stylesheet" href="/experience.css?v=1">
+  <link rel="preload" as="image" href="/assets/tavern.webp" fetchpriority="high">
+  <link rel="prefetch" as="image" href="/assets/revolver.webp">
 </head>
 <body>
   <div class="ambient ambient-one"></div>
@@ -29,14 +32,15 @@
   <main>
     <section class="view home-view" id="home-view">
       <div class="home-hero">
-        <div class="eyebrow">A GAME OF LIES, LUCK AND BULLETS</div>
+        <div class="eyebrow"><span class="eyebrow-line"></span> THE HOUSE IS ALWAYS LISTENING</div>
         <h1>骗子<span>酒馆</span></h1>
-        <p class="hero-copy">J、Q、K 各六张，大小王当万能牌。<br>你可以说真话，但没人会相信你。</p>
+        <p class="hero-copy">落座，藏好你的底牌。<br>在这里，真话也需要一点演技。</p>
+        <p class="hero-note">一张牌桌 · 两位真人 · 各怀心思的 AI 对手</p>
         <div class="hero-chips">
-          <span>20 张特制牌</span>
-          <span>上海 / 杭州双城账户</span>
-          <span>AI 自动补位</span>
-          <span>摄像头 P2P</span>
+          <span>20 张牌</span>
+          <span>4 个席位</span>
+          <span>6 位 AI 角色</span>
+          <span>面对面连线</span>
         </div>
         <div class="hero-deck" aria-hidden="true">
           <div class="show-card show-card-back">🃏</div>
@@ -48,7 +52,7 @@
       <div class="home-panel">
         <div class="panel-heading">
           <span>账户登录</span>
-          <small>ONE TABLE · FIXED ACCOUNTS</small>
+          <small>YOUR SEAT IS WAITING</small>
         </div>
         <form id="login-form" class="stack-form">
           <label for="login-location">选择地点账户</label>
@@ -57,8 +61,9 @@
             <option value="hangzhou">杭州账户</option>
           </select>
           <label for="login-key" class="field-gap">账户密钥</label>
-          <input id="login-key" type="password" autocomplete="current-password" spellcheck="false" placeholder="输入该账户的登录密钥">
-          <button class="primary-button full login-submit" type="submit">登录并进入主桌</button>
+          <input id="login-key" type="password" autocomplete="current-password" spellcheck="false" placeholder="输入该账户的登录密钥" required>
+          <button class="primary-button full login-submit" type="submit">入座 <span class="ui-icon" data-icon="arrow-right" aria-hidden="true"></span></button>
+          <p class="login-footnote">一人也能开局，空位由 AI 补齐。</p>
         </form>
 
         <section class="account-panel" id="account-panel" hidden>
@@ -96,13 +101,18 @@
           <button class="toolbar-button active" id="voice-toggle" type="button"><span>🔊</span> 语音开</button>
           <button class="toolbar-button" id="music-toggle" type="button" hidden><span>♫</span> 音乐开</button>
           <button class="toolbar-button" id="camera-toggle" type="button"><span>◉</span> 开启摄像头</button>
+          <button class="toolbar-button icon-button" id="experience-button" type="button" aria-label="体验设置" title="体验设置"><span class="ui-icon" data-icon="settings-2" aria-hidden="true"></span></button>
           <button class="toolbar-button danger" id="leave-button" type="button">离开主桌</button>
         </div>
       </div>
 
+      <div class="connection-banner" id="connection-banner" role="status" hidden><span>连接暂时中断，正在重新连接牌桌…</span><button id="reconnect-button" type="button">重新连接</button></div>
+
       <div class="room-grid">
         <div class="table-column">
           <div class="table-stage" id="table-stage">
+            <div class="stage-label"><i></i> THE MAIN TABLE <span>01</span></div>
+            <div class="turn-banner" id="turn-banner" role="status"><span id="turn-banner-title">等待入座</span><small id="turn-banner-copy">空位由 AI 补齐</small><div class="turn-progress"><i id="turn-progress-fill"></i></div></div>
             <div class="table-shadow"></div>
             <div class="table-felt">
               <div class="felt-ring felt-ring-outer"></div>
@@ -124,6 +134,7 @@
           </div>
 
           <div class="camera-dock" id="camera-dock" hidden>
+            <button type="button" id="camera-size-toggle" class="camera-size-toggle" aria-label="放大视频" aria-expanded="false"><span class="ui-icon" style="--icon:url('/assets/icons/expand.svg')" aria-hidden="true"></span></button>
             <div class="camera-tile camera-local">
               <video id="local-video" autoplay muted playsinline></video>
               <span class="camera-label">你</span>
@@ -139,7 +150,8 @@
           <div class="action-dock">
             <div id="lineup-panel" class="lineup-panel" hidden></div>
             <div class="hand-heading">
-              <span>你的手牌</span>
+              <span>你的手牌 <b id="hand-count"></b></span>
+              <div class="hand-tools"><button type="button" id="sort-hand" title="把本轮点数和万能牌排在前面">理牌</button><button type="button" id="clear-selection">清空选择</button></div>
               <small id="hand-hint">选择 1 到 3 张牌</small>
             </div>
             <div id="hand-row" class="hand-row"></div>
@@ -148,10 +160,10 @@
           <div id="round-thoughts" class="round-thoughts round-thoughts-under" hidden></div>
         </div>
 
-        <aside class="side-panel" hidden>
+        <aside class="side-panel" id="side-panel">
           <div class="side-heading">
             <div>
-              <span>牌桌记录</span>
+              <span>酒馆实录</span>
               <small id="round-label">等待开局</small>
             </div>
             <span class="live-dot"></span>
@@ -168,6 +180,16 @@
 
     </section>
   </main>
+
+  <dialog class="modal experience-modal" id="experience-dialog" aria-labelledby="experience-title">
+    <div class="modal-head"><div><span class="modal-kicker">MAKE YOURSELF COMFORTABLE</span><h2 id="experience-title">玩得舒服一点</h2></div><button class="close-button" data-close-dialog="experience-dialog" type="button" aria-label="关闭体验设置">×</button></div>
+    <div class="experience-options">
+      <label><span>动态效果<small>保留出牌与判定，减少震屏和闪光。</small></span><select id="motion-select"><option value="full">完整动效</option><option value="reduced">减少动态效果</option></select></label>
+      <label><span>语音播报<small>角色喊话始终配有字幕。</small></span><select id="narration-select"><option value="key">角色与关键播报</option><option value="roles">仅角色语音</option><option value="off">关闭语音</option></select></label>
+      <p class="keyboard-guide"><kbd>1</kbd>–<kbd>5</kbd> 选牌 <kbd>Enter</kbd> 出牌 <kbd>Esc</kbd> 清空选择</p>
+    </div>
+    <div class="modal-actions"><button class="primary-button" data-close-dialog="experience-dialog" type="button">准备好了</button></div>
+  </dialog>
 
   <dialog class="modal" id="settings-dialog">
     <div class="modal-head">
@@ -194,12 +216,12 @@
       <button class="close-button" data-close-dialog="rules-dialog" type="button">×</button>
     </div>
     <div class="rules-grid">
-      <article><b>01</b><h3>四席牌局</h3><p>最多两位真人玩家，其余席位由 AI 补齐。也可以 0 位真人，围观四个 AI 互相欺骗。</p></article>
+      <article><b>01</b><h3>四席牌局</h3><p>一位或两位真人都能开局，其余席位由 AI 补齐。登录后进入同一张主桌，开局前由房主选择 AI 阵容。</p></article>
       <article><b>02</b><h3>二十张牌</h3><p>J、Q、K 各 6 张，加大小王两张万能牌。每轮公开一个 J/Q/K 桌面点数，万能牌可当任意点数。</p></article>
       <article><b>03</b><h3>出牌与说谎</h3><p>每回合选择 1 到 3 张牌扣在桌上。你可以说真话，也可以面不改色地撒谎；含万能牌的亮牌永远算真。</p></article>
       <article><b>04</b><h3>质疑亮牌</h3><p>质疑上一位玩家。若对方说谎，对方扣扳机；若对方说真话，质疑者扣扳机。</p></article>
       <article><b>05</b><h3>俄罗斯轮盘</h3><p>每把左轮有 3 个弹仓、1 发子弹，每次扣扳机约有 1/3 概率中弹出局；空枪则继续。</p></article>
-      <article><b>06</b><h3>连续牌局</h3><p>枪响或质疑后不会重新发牌。手牌打空后只能质疑；全部手牌耗尽，或只剩一名玩家存活时，牌局才结束。</p></article>
+      <article><b>06</b><h3>连续牌局</h3><p>枪响后保留手牌继续。空手仍然存活，多人时自动跳过；只剩两人、或最后一名持牌者面对上一手时，按界面提示强制质疑。全部手牌打完后还有最后一次质疑。</p></article>
     </div>
     <div class="privacy-note"><span>◉</span> 摄像头视频仅在两位真人浏览器之间通过 WebRTC 点对点传输，不录制、不落盘。</div>
     <div class="modal-actions"><button class="secondary-button" data-close-dialog="rules-dialog" type="button">明白了</button></div>
@@ -259,6 +281,7 @@
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
   <audio id="bgm-audio" loop preload="none"></audio>
 
-  <script src="/app.js?v=15" defer></script>
+  <script src="/experience.js?v=1" defer></script>
+  <script src="/app.js?v=16" defer></script>
 </body>
 </html>

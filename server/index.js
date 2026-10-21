@@ -110,6 +110,10 @@ const MIME_TYPES = {
   ".js": "application/javascript; charset=utf-8",
   ".svg": "image/svg+xml; charset=utf-8",
   ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".webp": "image/webp",
+  ".woff2": "font/woff2",
   ".ico": "image/x-icon",
   ".json": "application/json; charset=utf-8"
 };
@@ -297,7 +301,12 @@ async function handleApi(request, response, url) {
       sendJson(response, 401, { error: "登录已失效，请重新登录。" });
       return true;
     }
-    if (!account.username || account.pendingRename) {
+    const mainRoom = store.rooms.get("MAIN");
+    const existingSeat = mainRoom && mainRoom.players.some((player) =>
+      player.occupied && player.accountId === account.id);
+    const canWatchCurrentGame = existingSeat &&
+      (mainRoom.phase === "playing" || mainRoom.phase === "out_challenge");
+    if (!account.username || (account.pendingRename && !canWatchCurrentGame)) {
       sendJson(response, 409, {
         error: account.pendingRename ? "你已被淘汰，请先更换用户名。" : "请先设置用户名。",
         code: "USERNAME_REQUIRED",
@@ -469,36 +478,13 @@ async function handleApi(request, response, url) {
   }
 
   if (request.method === "POST" && url.pathname === "/api/rooms") {
-    const body = await readJson(request);
-    const result = store.createRoom({
-      name: body.name,
-      demo: Boolean(body.demo)
-    });
-    sendJson(response, 201, {
-      roomCode: result.room.code,
-      playerId: result.playerId,
-      playerToken: result.playerToken || null,
-      viewerId: result.viewerId,
-      spectator: !result.playerId
-    });
+    sendJson(response, 410, { error: "请登录地点账户后进入主桌。" });
     return true;
   }
 
   const joinCode = roomCodeFromPath(url.pathname, "join");
   if (request.method === "POST" && joinCode) {
-    const body = await readJson(request);
-    const result = store.joinRoom(joinCode, body.name);
-    if (result.error) {
-      sendJson(response, 404, { error: result.error });
-      return true;
-    }
-    sendJson(response, 200, {
-      roomCode: result.room.code,
-      playerId: result.playerId,
-      playerToken: result.playerToken || null,
-      viewerId: result.viewerId,
-      spectator: Boolean(result.spectator)
-    });
+    sendJson(response, 410, { error: "请登录地点账户后进入主桌。" });
     return true;
   }
 
@@ -639,7 +625,7 @@ const server = http.createServer(async (request, response) => {
 });
 
 server.listen(PORT, HOST, () => {
-  console.log("骗子酒馆 MVP running at http://" + HOST + ":" + PORT);
+  console.log("骗子酒馆 MVP running at http://" + HOST + ":" + server.address().port);
   console.log("Enabled AI roles:", adminStore.enabledRoles().length);
   if (adminStore.generatedPassword) {
     console.log("Generated initial admin password:", adminStore.generatedPassword);
