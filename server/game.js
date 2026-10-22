@@ -222,6 +222,7 @@ function addHuman(room, id, name, options) {
   seat.gun = null;
   seat.modelProfileId = null;
   seat.modelLabel = null;
+  seat.voice = null;
   if (!room.hostId) {
     room.hostId = id;
   }
@@ -254,6 +255,7 @@ function removeHuman(room, playerId) {
   player.accountId = null;
   player.location = null;
   player.matchStats = null;
+  player.voice = null;
   if (room.hostId === playerId) {
     const nextHost = room.players.find((item) => item.occupied && !item.isAI);
     room.hostId = nextHost ? nextHost.id : null;
@@ -417,6 +419,7 @@ function fillAISeats(room, aiRoles) {
     player.emoji = role ? (role.avatarEmoji || persona.emoji) : persona.emoji;
     player.avatarUrl = role ? (role.avatarUrl || null) : null;
     player.portraitUrl = role ? (role.portraitUrl || null) : null;
+    player.voice = role ? (role.voice || null) : null;
     player.isAI = true;
     player.occupied = true;
     player.connected = true;
@@ -824,6 +827,7 @@ function vacateSeat(player) {
   player.avatarUrl = null;
   player.portraitUrl = null;
   player.modelLabel = null;
+  player.voice = null;
 }
 
 function prepareRematch(room, options) {
@@ -931,6 +935,7 @@ function publicState(room, viewerId) {
       aiRoleId: player.aiRoleId,
       avatarUrl: player.avatarUrl,
       portraitUrl: player.portraitUrl,
+      voice: player.voice || null,
       modelLabel: player.modelLabel,
       isHost: player.id === room.hostId,
       thinking: player.id === room.aiThinkingId

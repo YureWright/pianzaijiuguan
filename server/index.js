@@ -7,6 +7,9 @@ const { URL } = require("node:url");
 const { RoomStore } = require("./rooms");
 const { AdminStore } = require("./admin");
 const { AccountStore } = require("./accounts");
+const ai = require("./ai");
+const ttsService = require("./tts");
+const doubaoTtsService = require("./doubaoTts");
 
 function loadDotEnv() {
   const envPath = path.join(__dirname, "..", ".env");
@@ -124,6 +127,15 @@ function sendJson(response, status, payload) {
   response.end(body);
 }
 
+function sendAudio(response, status, audio, cacheControl) {
+  response.writeHead(status, {
+    "Content-Type": audio.contentType || "audio/mpeg",
+    "Cache-Control": cacheControl || "private, max-age=3600",
+    "Content-Length": audio.buffer.length
+  });
+  response.end(audio.buffer);
+}
+
 function sendText(response, status, text) {
   response.writeHead(status, {
     "Content-Type": "text/plain; charset=utf-8",
@@ -213,6 +225,8 @@ async function handleApi(request, response, url) {
   }
 
   if (request.method === "GET" && url.pathname === "/api/config") {
+    const publicTts = adminStore.publicTts();
+    const publicDoubao = adminStore.publicDoubao();
     sendJson(response, 200, {
       appName: "骗子酒馆",
       maxHumans: 2,
@@ -225,6 +239,7 @@ async function handleApi(request, response, url) {
       },
       aiRoleCount: adminStore.enabledRoles().length,
       music: adminStore.publicMusic(),
+      tts: Object.assign(publicTts, { enabled: Boolean(publicTts.enabled || publicDoubao.enabled) }),
       adminEnabled: true
     });
     return true;
@@ -234,6 +249,71 @@ async function handleApi(request, response, url) {
     sendJson(response, 200, {
       roles: adminStore.enabledRoles().map((role) => adminStore.publicView(role))
     });
+    return true;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/tts") {
+    const body = await readJson(request);
+    const roomCode = String(body.roomCode || "").trim().toUpperCase();
+    if (!roomCode || !store.authenticatePlayer(roomCode, body.playerId, body.token)) {
+      sendJson(response, 401, { error: "语音请求未通过牌桌身份验证。" });
+      return true;
+    }
+    const startedAt = Date.now();
+    try {
+      const role = body.roleId ? adminStore.getRole(String(body.roleId), true) : null;
+      const useDoubao = Boolean(role && role.ttsProvider === "doubao");
+      let audio;
+      let providerUsed = "qwen";
+      if (useDoubao) {
+        const doubaoSettings = adminStore.getDoubao();
+        const doubaoReady = doubaoSettings.authMode === "apikey"
+          ? Boolean(doubaoSettings.apiKey && doubaoSettings.resourceId)
+          : Boolean(doubaoSettings.appId && doubaoSettings.accessToken);
+        if (doubaoSettings.enabled && doubaoReady) {
+          try {
+            audio = await doubaoTtsService.synthesize(doubaoSettings, {
+              text: body.text,
+              voice: role.voice || doubaoSettings.voiceType,
+              timeoutMs: 30000
+            });
+            providerUsed = "doubao";
+          } catch (doubaoError) {
+            console.warn("[tts] doubao failed, falling back to qwen:", doubaoError.message);
+          }
+        }
+        if (!audio) {
+          const qwenSettings = adminStore.getTts();
+          if (!qwenSettings.enabled) {
+            sendJson(response, 503, { error: "豆包语音调用失败，千问备用语音也未启用。" });
+            return true;
+          }
+          audio = await ttsService.synthesize(qwenSettings, {
+            text: body.text,
+            voice: qwenSettings.defaultVoice,
+            timeoutMs: 30000
+          });
+          providerUsed = "qwen-fallback";
+        }
+      } else {
+        const settings = adminStore.getTts();
+        if (!settings.enabled) {
+          sendJson(response, 503, { error: "大模型语音尚未启用。" });
+          return true;
+        }
+        audio = await ttsService.synthesize(settings, {
+          text: body.text,
+          voice: (role && role.voice) || body.voice || settings.narratorVoice,
+          timeoutMs: 30000
+        });
+      }
+      console.log("[tts] " + providerUsed + " " + (Date.now() - startedAt) + "ms, " +
+        Array.from(String(body.text || "")).length + " chars");
+      sendAudio(response, 200, audio);
+    } catch (error) {
+      console.warn("[tts] synthesis failed:", error.message);
+      sendJson(response, 502, { error: error.message });
+    }
     return true;
   }
 
@@ -384,11 +464,114 @@ async function handleApi(request, response, url) {
     return true;
   }
 
+  if (request.method === "POST" && url.pathname === "/api/admin/roles/test") {
+    if (!requireAdmin(request, response)) {
+      return true;
+    }
+    const body = await readJson(request);
+    const storedRole = body.roleId ? adminStore.getRole(String(body.roleId), true) : null;
+    const provider = ["openai", "anthropic", "gemini"].includes(body.provider)
+      ? body.provider
+      : (storedRole ? storedRole.provider : "openai");
+    const model = String(body.model || (storedRole ? storedRole.model : "")).trim().slice(0, 160);
+    if (!model) {
+      sendJson(response, 400, { error: "模型名称不能为空。" });
+      return true;
+    }
+    let apiKey = storedRole ? (storedRole.apiKey || "") : "";
+    if (body.clearApiKey === true) {
+      apiKey = "";
+    } else if (typeof body.apiKey === "string" && body.apiKey.trim()) {
+      apiKey = body.apiKey.trim().slice(0, 4000);
+    }
+    const baseUrl = String(body.baseUrl || (storedRole ? storedRole.baseUrl : ai.DEFAULT_BASE_URLS[provider]))
+      .trim()
+      .slice(0, 500);
+    try {
+      const result = await ai.testConnection({ provider, baseUrl, model, apiKey }, { timeoutMs: 20000 });
+      sendJson(response, 200, result);
+    } catch (error) {
+      sendJson(response, 502, { error: error.message || "模型接口测试失败。" });
+    }
+    return true;
+  }
+
   if (request.method === "GET" && url.pathname === "/api/admin/music") {
     if (!requireAdmin(request, response)) {
       return true;
     }
     sendJson(response, 200, { music: adminStore.publicMusic() });
+    return true;
+  }
+
+  if (request.method === "GET" && url.pathname === "/api/admin/tts") {
+    if (!requireAdmin(request, response)) {
+      return true;
+    }
+    sendJson(response, 200, { tts: adminStore.adminTts() });
+    return true;
+  }
+
+  if (request.method === "PUT" && url.pathname === "/api/admin/tts") {
+    if (!requireAdmin(request, response)) {
+      return true;
+    }
+    const body = await readJson(request);
+    const tts = adminStore.updateTts(body);
+    ttsService.clearCache();
+    sendJson(response, 200, { tts });
+    return true;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/admin/tts/test") {
+    if (!requireAdmin(request, response)) {
+      return true;
+    }
+    const body = await readJson(request);
+    try {
+      let audio;
+      if (body.provider === "doubao") {
+        const settings = adminStore.getDoubao();
+        audio = await doubaoTtsService.synthesize(settings, {
+          text: body.text || "豆包经典语音，今晚由我来坐庄。",
+          voice: body.voice || settings.voiceType,
+          timeoutMs: 30000
+        });
+      } else {
+        const settings = adminStore.getTts();
+        audio = await ttsService.synthesize(settings, {
+          text: body.text || "欢迎来到骗子酒馆，今晚没人值得相信。",
+          voice: body.voice || settings.narratorVoice,
+          timeoutMs: 30000
+        });
+      }
+      sendAudio(response, 200, audio, "no-store");
+    } catch (error) {
+      sendJson(response, 502, { error: error.message });
+    }
+    return true;
+  }
+
+  if (request.method === "GET" && url.pathname === "/api/admin/doubao") {
+    if (!requireAdmin(request, response)) {
+      return true;
+    }
+    sendJson(response, 200, { doubao: adminStore.adminDoubao() });
+    return true;
+  }
+
+  if (request.method === "PUT" && url.pathname === "/api/admin/doubao") {
+    if (!requireAdmin(request, response)) {
+      return true;
+    }
+    const body = await readJson(request);
+    try {
+      const doubao = adminStore.updateDoubao(body);
+      doubaoTtsService.clearCache();
+      sendJson(response, 200, { doubao });
+    } catch (error) {
+      sendJson(response, 400, { error: error.message });
+    }
     return true;
   }
 

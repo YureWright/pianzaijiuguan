@@ -6,8 +6,8 @@
   <meta name="theme-color" content="#0a0d0b">
   <title>管理员后台 | 骗子酒馆</title>
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="/styles.css?v=15">
-  <link rel="stylesheet" href="/admin.css?v=15">
+  <link rel="stylesheet" href="/styles.css?v=27">
+  <link rel="stylesheet" href="/admin.css?v=27">
 </head>
 <body class="admin-body">
   <div class="ambient ambient-one"></div>
@@ -56,6 +56,90 @@
         <div><span id="enabled-count">0</span><small>已启用</small></div>
         <div><span id="key-count">0</span><small>已配置密钥</small></div>
       </div>
+      <section class="admin-music-panel admin-tts-panel">
+        <div class="admin-music-head">
+          <div>
+            <span class="modal-kicker">VOICE ENGINE</span>
+            <strong>千问大模型语音</strong>
+            <p>使用阿里云百炼 Qwen3-TTS 生成旁白与角色语音。每个 AI 拥有独立音色配置。北京地域使用 dashscope.aliyuncs.com，新加坡地域使用 dashscope-intl.aliyuncs.com；语音失败时自动回退浏览器语音。</p>
+          </div>
+          <label class="checkbox-row"><input id="tts-enabled" type="checkbox"> 启用大模型语音</label>
+        </div>
+        <div class="admin-music-grid">
+          <label class="wide">接口 URL<input id="tts-base-url" spellcheck="false" placeholder="https://dashscope.aliyuncs.com/api/v1"></label>
+          <label>模型名称<input id="tts-model" spellcheck="false" placeholder="qwen3-tts-flash"></label>
+          <label>API Key<input id="tts-api-key" type="password" spellcheck="false" autocomplete="off" placeholder="留空则不修改"><small class="tts-key-status" id="tts-key-status">尚未配置</small></label>
+          <label>旁白音色<input id="tts-narrator-voice" list="tts-voice-options" maxlength="60" placeholder="Sunny"></label>
+          <label>默认 AI 音色<input id="tts-default-voice" list="tts-voice-options" maxlength="60" placeholder="Cherry"></label>
+          <label>语速<input id="tts-speed" type="number" min="0.5" max="2" step="0.05" value="1"></label>
+          <label>音频格式<select id="tts-format">
+            <option value="mp3">MP3</option>
+            <option value="wav">WAV</option>
+            <option value="opus">Opus</option>
+            <option value="aac">AAC</option>
+            <option value="flac">FLAC</option>
+          </select></label>
+          <label class="wide">试听文本<input id="tts-test-text" maxlength="120" value="欢迎来到骗子酒馆，今晚没人值得相信。"></label>
+        </div>
+        <div class="tts-voice-catalog">
+          <div class="tts-voice-catalog-head">
+            <strong>可用音色</strong>
+            <span>点击按钮快速填入旁白或默认 AI 音色；每个角色的专属音色在角色编辑弹窗中设置。</span>
+          </div>
+          <div class="tts-voice-grid" id="tts-voice-grid"></div>
+        </div>
+        <div class="admin-music-footer admin-tts-footer">
+          <audio id="tts-preview" controls preload="none"></audio>
+          <span id="tts-status">尚未启用</span>
+          <label class="checkbox-row"><input id="tts-clear-key" type="checkbox"> 清除密钥</label>
+          <button class="secondary-button" id="tts-test" type="button">保存并试听</button>
+          <button class="primary-button" id="save-tts" type="button">保存语音设置</button>
+        </div>
+      </section>
+      <section class="admin-music-panel admin-doubao-panel">
+        <div class="admin-music-head">
+          <div>
+            <span class="modal-kicker">DOUBAO CLASSIC VOICE</span>
+            <strong>豆包经典语音</strong>
+            <p>使用火山引擎豆包经典 TTS。配置 AppID、Access Token 和 Cluster 后，豆包角色将自动使用专属经典音色；其他角色继续使用千问。</p>
+          </div>
+          <label class="checkbox-row"><input id="doubao-enabled" type="checkbox"> 启用豆包语音</label>
+        </div>
+        <div class="admin-music-grid">
+          <label>鉴权方式<select id="doubao-auth-mode">
+            <option value="classic">经典版 AppID + Token</option>
+            <option value="apikey">新版 API Key</option>
+          </select></label>
+          <label class="wide">接口 URL<input id="doubao-endpoint" spellcheck="false" placeholder="https://openspeech.bytedance.com/api/v1/tts"></label>
+          <label class="doubao-classic-field">AppID<input id="doubao-app-id" spellcheck="false" placeholder="经典版数字 AppID"></label>
+          <label class="doubao-classic-field">Access Token<input id="doubao-access-token" type="password" spellcheck="false" autocomplete="off" placeholder="留空则不修改"><small class="tts-key-status" id="doubao-token-status">尚未配置</small></label>
+          <label class="doubao-classic-field">Cluster<input id="doubao-cluster" spellcheck="false" placeholder="volcano_tts"></label>
+          <label class="doubao-apikey-field">API Key<input id="doubao-api-key" type="password" spellcheck="false" autocomplete="off" placeholder="新版控制台 API Key"><small class="tts-key-status" id="doubao-api-key-status">尚未配置</small></label>
+          <label class="doubao-apikey-field">Resource ID<input id="doubao-resource-id" spellcheck="false" placeholder="seed-tts-2.0"><small class="field-note">语音合成 2.0 填 seed-tts-2.0；声音复刻填 seed-icl-2.0。</small></label>
+          <label>默认音色<input id="doubao-voice-type" list="doubao-voice-options" maxlength="80" placeholder="请选择音色目录中的 speaker ID"></label>
+          <label>语速<input id="doubao-speed" type="number" min="0.5" max="2" step="0.05" value="1"></label>
+          <label>音频格式<select id="doubao-format">
+            <option value="mp3">MP3</option>
+            <option value="wav">WAV</option>
+            <option value="ogg_opus">OGG Opus</option>
+          </select></label>
+          <label class="wide">试听文本<input id="doubao-test-text" maxlength="120" value="豆包经典语音，今晚由我来坐庄。"></label>
+        </div>
+        <div class="tts-voice-catalog">
+          <div class="tts-voice-catalog-head">
+            <strong>豆包可用音色</strong>
+            <span>点击“设为默认”可填入默认音色；角色弹窗中选择“豆包经典 TTS”后也可逐角色指定。</span>
+          </div>
+          <div class="tts-voice-grid" id="doubao-voice-grid"></div>
+        </div>
+        <div class="admin-music-footer admin-tts-footer">
+          <span id="doubao-status">尚未启用</span>
+          <label class="checkbox-row"><input id="doubao-clear-token" type="checkbox"> 清除 Access Token</label>
+          <label class="checkbox-row doubao-apikey-field"><input id="doubao-clear-api-key" type="checkbox"> 清除 API Key</label>
+          <button class="secondary-button" id="doubao-test" type="button">保存并试听</button>
+          <button class="primary-button" id="save-doubao" type="button">保存豆包语音设置</button>
+        </div>
+      </section>
       <section class="admin-music-panel">
         <div class="admin-music-head">
           <div>
@@ -125,7 +209,19 @@
         </label>
         <label class="wide">接口 URL<input id="role-base-url" spellcheck="false" placeholder="https://api.deepseek.com/v1"></label>
         <label>模型名称<input id="role-model" spellcheck="false" placeholder="deepseek-chat"></label>
-        <label>API Key<input id="role-api-key" type="password" spellcheck="false" autocomplete="off" placeholder="留空则不修改"><small id="key-status"></small></label>
+        <label>语音引擎<select id="role-tts-provider">
+          <option value="qwen">千问 Qwen3-TTS</option>
+          <option value="doubao">豆包经典 TTS</option>
+        </select></label>
+        <div class="role-voice-field wide">
+          <label for="role-voice">语音音色</label>
+          <div class="role-voice-input-row">
+            <input id="role-voice" list="tts-voice-options" maxlength="60" placeholder="Cherry">
+            <button class="secondary-button" id="role-voice-preview" type="button">试听</button>
+          </div>
+          <small class="field-note" id="role-voice-note">请选择或填写千问 TTS 音色名</small>
+        </div>
+        <label class="wide">API Key<input id="role-api-key" type="password" spellcheck="false" autocomplete="off" placeholder="留空则使用已保存的 Key"><small id="key-status"></small><small class="role-test-status" id="role-test-status"></small></label>
         <label class="wide">AI 提示词<textarea id="role-prompt" rows="6" maxlength="4000" placeholder="描述这个 AI 的性格、策略、说话方式和行为偏好"></textarea></label>
         <label class="checkbox-row wide"><input id="role-clear-key" type="checkbox"> 清除已保存的 API Key</label>
         <label class="checkbox-row wide"><input id="role-enabled" type="checkbox" checked> 允许玩家在牌局中选择此角色</label>
@@ -134,6 +230,7 @@
     <div class="modal-actions role-modal-actions">
       <button class="ghost-button danger-text" id="delete-role" type="button">删除角色</button>
       <span class="spacer"></span>
+      <button class="secondary-button" id="test-role-api" type="button">测试连接</button>
       <button class="secondary-button" id="cancel-role" type="button">取消</button>
       <button class="primary-button" id="save-role" type="button">保存</button>
     </div>
@@ -159,6 +256,8 @@
   </dialog>
 
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
-  <script src="/admin.js?v=15" defer></script>
+  <datalist id="tts-voice-options"></datalist>
+  <datalist id="doubao-voice-options"></datalist>
+  <script src="/admin.js?v=27" defer></script>
 </body>
 </html>

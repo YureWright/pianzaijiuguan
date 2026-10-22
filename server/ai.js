@@ -220,7 +220,7 @@ async function callOpenAI(profile, prompt, signal) {
     })
   });
   if (!response.ok) {
-    throw new Error("OpenAI 兼容接口返回 " + response.status);
+    throw await providerError("OpenAI 兼容接口", response);
   }
   return extractContent(await response.json(), "openai");
 }
@@ -246,7 +246,7 @@ async function callAnthropic(profile, prompt, signal) {
     })
   });
   if (!response.ok) {
-    throw new Error("Anthropic 接口返回 " + response.status);
+    throw await providerError("Anthropic 接口", response);
   }
   return extractContent(await response.json(), "anthropic");
 }
@@ -265,9 +265,59 @@ async function callGemini(profile, prompt, signal) {
     })
   });
   if (!response.ok) {
-    throw new Error("Gemini 接口返回 " + response.status);
+    throw await providerError("Gemini 接口", response);
   }
   return extractContent(await response.json(), "gemini");
+}
+
+async function providerError(label, response) {
+  let detail = "";
+  try {
+    detail = (await response.text()).replace(/\s+/g, " ").trim().slice(0, 240);
+  } catch (error) {
+    detail = "";
+  }
+  return new Error(label + "返回 " + response.status + (detail ? "：" + detail : ""));
+}
+
+async function testConnection(profile, options) {
+  const opts = options || {};
+  const prompt = {
+    system: "你是 API 连通性测试助手。只回复 OK，不要输出其他内容。",
+    user: "请只回复 OK。"
+  };
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), opts.timeoutMs || 20000);
+  const startedAt = Date.now();
+  try {
+    let text;
+    if (profile.provider === "anthropic") {
+      text = await callAnthropic(profile, prompt, controller.signal);
+    } else if (profile.provider === "gemini") {
+      text = await callGemini(profile, prompt, controller.signal);
+    } else {
+      text = await callOpenAI(profile, prompt, controller.signal);
+    }
+    const responseText = String(text || "").replace(/\s+/g, " ").trim().slice(0, 160);
+    if (!responseText) {
+      throw new Error("接口已连通，但模型返回了空内容。");
+    }
+    return {
+      ok: true,
+      latencyMs: Date.now() - startedAt,
+      endpoint: endpointFor(profile),
+      provider: profile.provider || "openai",
+      model: profile.model,
+      response: responseText
+    };
+  } catch (error) {
+    if (error && error.name === "AbortError") {
+      throw new Error("连接超时，请检查接口 URL、网络或代理设置。");
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 async function decideWithModel(profile, context, options) {
@@ -439,6 +489,7 @@ module.exports = {
   parseModelJson,
   normalizeDecision,
   decideWithModel,
+  testConnection,
   localDecision,
   buildLocalMonologue
 };

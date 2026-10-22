@@ -59,12 +59,16 @@ const app = {
   voiceEnabled: true,
   musicConfig: null,
   musicUserEnabled: true,
+  ttsConfig: null,
+  voicePrefetch: new Map(),
   voices: [],
   voiceQueue: [],
   speaking: false,
   voiceGeneration: 0,
   voiceEpoch: 0,
   currentVoiceItem: null,
+  currentVoiceAudio: null,
+  currentVoiceUrl: "",
   voiceTimers: [],
   lastSpokenThoughtKey: "",
   lastRoundThoughtsKey: "",
@@ -993,12 +997,12 @@ function handleState(state) {
   renderRoom();
   syncPeer(state);
   handlePendingSpeech(state);
-  if (state.phase === "gameover") {
-    queueVictorySettlement(state);
-  }
   if (isFirst) {
     app.lastLogId = state.log.length > 0 ? state.log[state.log.length - 1].id : null;
     app.lastRevealId = state.lastReveal ? state.lastReveal.id : null;
+    if (state.phase === "gameover") {
+      queueVictorySettlement(state);
+    }
     return;
   }
 
@@ -1047,6 +1051,9 @@ function handleState(state) {
   }
   app.lastRevealId = state.lastReveal ? state.lastReveal.id : app.lastRevealId;
   app.lastLogId = state.log.length > 0 ? state.log[state.log.length - 1].id : app.lastLogId;
+  if (state.phase === "gameover") {
+    queueVictorySettlement(state);
+  }
   maybeShowVictorySettlement();
 }
 
@@ -1065,6 +1072,16 @@ function newLogEntries(state) {
 }
 
 function enqueueFx(event) {
+  const narration = narrationForEvent(event);
+  if (narration) {
+    const profile = resolveTtsProfile(narration.roleName);
+    prefetchVoice({
+      text: narration.text,
+      voice: profile.voice,
+      roleId: profile.roleId,
+      roleName: narration.roleName
+    });
+  }
   app.animationQueue.push(event);
   processFxQueue();
 }
@@ -1224,10 +1241,16 @@ async function runRevealTableEffect(event, layer) {
     stage.classList.add("reveal-active");
   }
   await new Promise((resolve) => setTimeout(resolve, 3000));
+  return stage;
+}
+
+function clearRevealTableEffect(layer, stage) {
+  if (layer) {
+    layer.innerHTML = "";
+  }
   if (stage) {
     stage.classList.remove("reveal-active");
   }
-  layer.innerHTML = "";
 }
 
 async function runTableEffect(event) {
@@ -1249,7 +1272,8 @@ async function runTableEffect(event) {
     return;
   }
   if (event.type === "reveal") {
-    await runRevealTableEffect(event, layer);
+    const stage = await runRevealTableEffect(event, layer);
+    clearRevealTableEffect(layer, stage);
     return;
   }
   if (event.type === "round") {
@@ -1294,7 +1318,7 @@ async function processFxQueue() {
         overlay.innerHTML = fxMarkup(event);
         prepareFx(event, overlay);
         playFxSound(event);
-        scheduleSpeech(4400, event.reveal.shot ? "中弹。" : "空枪。", event.reveal.shot ? "surprised" : "tease", event.reveal.loserName, "high");
+        scheduleSpeech(4400, event.reveal.shot ? "中弹。" : "空枪。", event.reveal.shot ? "surprised" : "tease", "", "high");
         await new Promise((resolve) => setTimeout(resolve, 7000));
         if (generation !== app.fxGeneration) {
           break;
@@ -1310,11 +1334,20 @@ async function processFxQueue() {
         await waitForNarrationEnd();
         await acknowledgeCinematic(cinematicId);
       } else {
-        narrateFx(event);
-        await waitForNarrationEnd();
-        playFxSound(event);
-        await runTableEffect(event);
-        await waitForNarrationEnd();
+        if (event.type === "reveal") {
+          const layer = getTableEffectLayer();
+          playFxSound(event);
+          const stage = await runRevealTableEffect(event, layer);
+          narrateFx(event);
+          await waitForNarrationEnd();
+          clearRevealTableEffect(layer, stage);
+        } else {
+          narrateFx(event);
+          await waitForNarrationEnd();
+          playFxSound(event);
+          await runTableEffect(event);
+          await waitForNarrationEnd();
+        }
         if (generation !== app.fxGeneration) {
           break;
         }
@@ -2328,6 +2361,10 @@ function loadMusicPreference() {
   }
 }
 
+function configureTts(tts) {
+  app.ttsConfig = tts && typeof tts === "object" ? tts : null;
+}
+
 function configureBackgroundMusic(music) {
   app.musicConfig = music && music.enabled && music.url ? music : null;
   const audio = $("bgm-audio");
@@ -2415,6 +2452,8 @@ function resetVoiceRuntime() {
   app.voiceQueue = [];
   app.speaking = false;
   app.currentVoiceItem = null;
+  releaseCurrentVoiceAudio();
+  clearVoicePrefetch();
   setBackgroundMusicDucked(false);
   if (window.speechSynthesis) {
     try {
@@ -2482,6 +2521,162 @@ function voicePreset(emotion, roleName) {
   };
 }
 
+function canUseRemoteTts() {
+  return Boolean(app.voiceEnabled && app.ttsConfig && app.ttsConfig.enabled &&
+    app.roomCode && app.playerId && app.playerToken);
+}
+
+function resolveTtsProfile(roleName) {
+  const config = app.ttsConfig || {};
+  const narratorVoice = config.narratorVoice || config.defaultVoice || "Ethan";
+  if (!roleName) {
+    return { voice: narratorVoice, roleId: "" };
+  }
+  const players = app.room && Array.isArray(app.room.players) ? app.room.players : [];
+  const speaker = players.find((player) => player && player.name === roleName && (player.isAI || player.voice));
+  return {
+    voice: (speaker && speaker.voice) || config.defaultVoice || narratorVoice,
+    roleId: (speaker && speaker.aiRoleId) || ""
+  };
+}
+
+function releaseCurrentVoiceAudio() {
+  const audio = app.currentVoiceAudio;
+  if (audio) {
+    audio.onended = null;
+    audio.onerror = null;
+    try {
+      audio.pause();
+    } catch (error) {
+      // Ignore media teardown failures.
+    }
+  }
+  if (app.currentVoiceUrl) {
+    try {
+      URL.revokeObjectURL(app.currentVoiceUrl);
+    } catch (error) {
+      // Ignore URL cleanup failures.
+    }
+  }
+  app.currentVoiceAudio = null;
+  app.currentVoiceUrl = "";
+}
+
+function voicePrefetchKey(item) {
+  return String(item.roleId || "") + "\n" + String(item.voice || "") + "\n" + String(item.text || "");
+}
+
+function prefetchVoice(item) {
+  if (!canUseRemoteTts() || !item || !item.text) {
+    return;
+  }
+  const key = voicePrefetchKey(item);
+  if (app.voicePrefetch.has(key)) {
+    return;
+  }
+  const epoch = app.voiceEpoch;
+  const entry = { url: "", promise: null, epoch };
+  entry.promise = fetchRemoteVoiceUrl(item).then((url) => {
+    if (epoch !== app.voiceEpoch || app.voicePrefetch.get(key) !== entry) {
+      URL.revokeObjectURL(url);
+      return null;
+    }
+    entry.url = url;
+    return url;
+  }).catch(() => {
+    app.voicePrefetch.delete(key);
+    return null;
+  });
+  app.voicePrefetch.set(key, entry);
+  while (app.voicePrefetch.size > 6) {
+    const oldestKey = app.voicePrefetch.keys().next().value;
+    const oldest = app.voicePrefetch.get(oldestKey);
+    app.voicePrefetch.delete(oldestKey);
+    if (oldest && oldest.url) {
+      URL.revokeObjectURL(oldest.url);
+    }
+  }
+}
+
+function takePrefetchedVoice(item) {
+  const key = voicePrefetchKey(item);
+  const entry = app.voicePrefetch.get(key);
+  if (!entry) {
+    return null;
+  }
+  app.voicePrefetch.delete(key);
+  return entry.promise || entry.url || null;
+}
+
+function clearVoicePrefetch() {
+  for (const entry of app.voicePrefetch.values()) {
+    if (entry.url) {
+      URL.revokeObjectURL(entry.url);
+    }
+  }
+  app.voicePrefetch.clear();
+}
+
+async function fetchRemoteVoiceUrl(item) {
+  const response = await fetch("/api/tts", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    cache: "no-store",
+    body: JSON.stringify({
+      roomCode: app.roomCode,
+      playerId: app.playerId,
+      token: app.playerToken,
+      text: item.text,
+      voice: item.voice,
+      roleId: item.roleId || ""
+    })
+  });
+  if (!response.ok) {
+    let detail = "";
+    try {
+      const payload = await response.json();
+      detail = payload.error || "";
+    } catch (error) {
+      detail = "";
+    }
+    throw new Error(detail || "大模型语音合成失败。");
+  }
+  const contentType = String(response.headers.get("content-type") || "").toLowerCase();
+  if (!contentType.startsWith("audio/") && !contentType.includes("application/octet-stream")) {
+    throw new Error("大模型语音返回了无效格式。");
+  }
+  const blob = await response.blob();
+  if (!blob.size) {
+    throw new Error("大模型语音返回了空音频。");
+  }
+  return URL.createObjectURL(blob);
+}
+
+function playBrowserVoice(item, finish) {
+  if (!window.speechSynthesis || typeof SpeechSynthesisUtterance === "undefined") {
+    setTimeout(finish, 0);
+    return;
+  }
+  const utterance = new SpeechSynthesisUtterance(item.text);
+  const profile = voicePreset(item.emotion, item.roleName);
+  const voice = selectVoice(item.roleName);
+  utterance.lang = "zh-CN";
+  utterance.rate = profile.rate;
+  utterance.pitch = profile.pitch;
+  utterance.volume = profile.volume;
+  if (voice) {
+    utterance.voice = voice;
+  }
+  utterance.onend = finish;
+  utterance.onerror = finish;
+  try {
+    window.speechSynthesis.resume();
+    window.speechSynthesis.speak(utterance);
+  } catch (error) {
+    finish();
+  }
+}
+
 function handlePendingSpeech(state) {
   const pending = state && state.pendingSpeech;
   if (!pending || !pending.id) {
@@ -2495,7 +2690,7 @@ function handlePendingSpeech(state) {
   }
   app.activeSpeechId = pending.id;
   const done = () => acknowledgeSpeech(pending.id);
-  if (!app.voiceEnabled || !window.speechSynthesis) {
+  if (!app.voiceEnabled || (!canUseRemoteTts() && !window.speechSynthesis)) {
     setTimeout(done, 0);
     return;
   }
@@ -2551,7 +2746,7 @@ async function acknowledgeSpeech(speechId) {
 }
 
 function speak(text, emotion, roleName, priority, onEnd) {
-  if (!app.voiceEnabled || !window.speechSynthesis) {
+  if (!app.voiceEnabled || (!canUseRemoteTts() && !window.speechSynthesis)) {
     if (typeof onEnd === "function") {
       setTimeout(onEnd, 0);
     }
@@ -2564,12 +2759,20 @@ function speak(text, emotion, roleName, priority, onEnd) {
     }
     return;
   }
-  app.voiceQueue.push({ text: clean, emotion: emotion || "calm", roleName: roleName || "", onEnd });
+  const profile = resolveTtsProfile(roleName || "");
+  app.voiceQueue.push({
+    text: clean,
+    emotion: emotion || "calm",
+    roleName: roleName || "",
+    voice: profile.voice,
+    roleId: profile.roleId,
+    onEnd
+  });
   drainVoiceQueue();
 }
 
 function drainVoiceQueue() {
-  if (app.speaking || app.voiceQueue.length === 0 || !window.speechSynthesis) {
+  if (app.speaking || app.voiceQueue.length === 0) {
     return;
   }
   app.speaking = true;
@@ -2577,17 +2780,8 @@ function drainVoiceQueue() {
   const epoch = app.voiceEpoch;
   const item = app.voiceQueue.shift();
   app.currentVoiceItem = item;
-  const utterance = new SpeechSynthesisUtterance(item.text);
-  const profile = voicePreset(item.emotion, item.roleName);
-  const voice = selectVoice(item.roleName);
-  utterance.lang = "zh-CN";
-  utterance.rate = profile.rate;
-  utterance.pitch = profile.pitch;
-  utterance.volume = profile.volume;
-  if (voice) {
-    utterance.voice = voice;
-  }
   let settled = false;
+  let fallbackStarted = false;
   let watchdog = null;
   const finish = () => {
     if (settled) {
@@ -2595,6 +2789,7 @@ function drainVoiceQueue() {
     }
     settled = true;
     clearTimeout(watchdog);
+    releaseCurrentVoiceAudio();
     if (epoch !== app.voiceEpoch) {
       return;
     }
@@ -2613,10 +2808,17 @@ function drainVoiceQueue() {
       }
     }, 70);
   };
-  utterance.onend = finish;
-  utterance.onerror = finish;
-  const maxMs = Math.max(30000, Math.min(60000, Array.from(item.text).length * 450 + 8000));
+  const fallback = () => {
+    if (settled || fallbackStarted || epoch !== app.voiceEpoch) {
+      return;
+    }
+    fallbackStarted = true;
+    releaseCurrentVoiceAudio();
+    playBrowserVoice(item, finish);
+  };
+  const maxMs = Math.max(45000, Math.min(120000, Array.from(item.text).length * 450 + 30000));
   watchdog = setTimeout(() => {
+    releaseCurrentVoiceAudio();
     try {
       window.speechSynthesis.cancel();
     } catch (error) {
@@ -2624,12 +2826,30 @@ function drainVoiceQueue() {
     }
     finish();
   }, maxMs);
-  try {
-    window.speechSynthesis.resume();
-    window.speechSynthesis.speak(utterance);
-  } catch (error) {
-    finish();
+  if (!canUseRemoteTts()) {
+    fallback();
+    return;
   }
+  const prefetched = takePrefetchedVoice(item);
+  const requestUrl = prefetched
+    ? Promise.resolve(prefetched).then((url) => url || fetchRemoteVoiceUrl(item))
+    : fetchRemoteVoiceUrl(item);
+  requestUrl.then((url) => {
+    if (settled || epoch !== app.voiceEpoch) {
+      URL.revokeObjectURL(url);
+      return;
+    }
+    app.currentVoiceUrl = url;
+    const audio = new Audio(url);
+    app.currentVoiceAudio = audio;
+    audio.preload = "auto";
+    audio.onended = finish;
+    audio.onerror = fallback;
+    const playback = audio.play();
+    if (playback && typeof playback.catch === "function") {
+      playback.catch(fallback);
+    }
+  }).catch(fallback);
 }
 
 function scheduleSpeech(delay, text, emotion, roleName, priority) {
@@ -2640,29 +2860,42 @@ function scheduleSpeech(delay, text, emotion, roleName, priority) {
   app.voiceTimers.push(timer);
 }
 
+function narrationForEvent(event) {
+  if (event.type === "play") {
+    if (event.suppressSpeech) {
+      return null;
+    }
+    return {
+      text: event.speech || (event.playerName + " 打出 " + event.count + " 张，宣称 " + event.claimRank + "。"),
+      emotion: "tease",
+      roleName: ""
+    };
+  } else if (event.type === "round") {
+    return { text: "第 " + event.round + " 轮，桌面点数 " + event.rank + "。", emotion: "calm", roleName: "" };
+  } else if (event.type === "reveal") {
+    const reveal = event.reveal;
+    return {
+      text: reveal.challengerName + " 质疑 " + reveal.claimantName + "。" +
+        (reveal.truthful ? "亮牌属实，质疑失败。" : "抓到谎言，质疑成功。"),
+      emotion: reveal.truthful ? "surprised" : "excited",
+      roleName: ""
+    };
+  } else if (event.type === "execution") {
+    const reveal = event.reveal;
+    return { text: reveal.loserName + " 扣下扳机。", emotion: "dramatic", roleName: "" };
+  } else if (event.type === "gameover") {
+    return { text: "牌局结束，" + event.winnerName + " 获胜。", emotion: "excited", roleName: "" };
+  }
+  return null;
+}
+
 function narrateFx(event) {
   if (!app.voiceEnabled) {
     return;
   }
-  if (event.type === "play") {
-    if (!event.suppressSpeech) {
-      speak(event.speech || (event.playerName + " 打出 " + event.count + " 张，宣称 " + event.claimRank + "。"), "tease", event.playerName);
-    }
-  } else if (event.type === "round") {
-    speak("第 " + event.round + " 轮，桌面点数 " + event.rank + "。", "calm", "");
-  } else if (event.type === "reveal") {
-    const reveal = event.reveal;
-    speak(
-      reveal.challengerName + " 质疑 " + reveal.claimantName + "。" +
-        (reveal.truthful ? "亮牌属实，质疑失败。" : "抓到谎言，质疑成功。"),
-      reveal.truthful ? "surprised" : "excited",
-      reveal.challengerName
-    );
-  } else if (event.type === "execution") {
-    const reveal = event.reveal;
-    speak(reveal.loserName + " 扣下扳机。", "dramatic", reveal.loserName);
-  } else if (event.type === "gameover") {
-    speak("牌局结束，" + event.winnerName + " 获胜。", "excited", event.winnerName);
+  const narration = narrationForEvent(event);
+  if (narration) {
+    speak(narration.text, narration.emotion, narration.roleName);
   }
 }
 
@@ -3155,6 +3388,7 @@ async function initialize() {
       app.iceServers = config.iceServers;
     }
     configureBackgroundMusic(config.music);
+    configureTts(config.tts);
     app.aiRoles = Array.isArray(roles.roles) ? roles.roles : [];
     renderAllProfiles();
   } catch (error) {

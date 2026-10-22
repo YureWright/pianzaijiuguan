@@ -125,6 +125,43 @@ test("model JSON parsing accepts fenced output and rejects illegal cards", () =>
   });
 });
 
+test("admin connection test reports latency, reply and API errors", async () => {
+  const server = await listen(async (request, response) => {
+    if (request.url.includes("/bad/chat/completions")) {
+      response.writeHead(401, { "Content-Type": "application/json" });
+      response.end(JSON.stringify({ error: { message: "invalid api key" } }));
+      return;
+    }
+    await readBody(request);
+    response.writeHead(200, { "Content-Type": "application/json" });
+    response.end(JSON.stringify({ choices: [{ message: { content: "OK" } }] }));
+  });
+  const port = server.address().port;
+  try {
+    const result = await ai.testConnection({
+      provider: "openai",
+      baseUrl: "http://127.0.0.1:" + port + "/v1",
+      model: "mock-model",
+      apiKey: "test-key"
+    });
+    assert.equal(result.ok, true);
+    assert.equal(result.response, "OK");
+    assert.equal(result.model, "mock-model");
+    assert.equal(result.latencyMs >= 0, true);
+    await assert.rejects(
+      ai.testConnection({
+        provider: "openai",
+        baseUrl: "http://127.0.0.1:" + port + "/bad",
+        model: "mock-model",
+        apiKey: "bad-key"
+      }),
+      /401.*invalid api key/
+    );
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
 test("local AI handles the empty-hand challenge window", () => {
   const value = context();
   value.phase = "out_challenge";

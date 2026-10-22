@@ -10,6 +10,46 @@ const PROVIDER_DEFAULTS = {
   gemini: "https://generativelanguage.googleapis.com/v1beta"
 };
 
+const DEFAULT_TTS = {
+  enabled: false,
+  provider: "openai",
+  baseUrl: "https://dashscope.aliyuncs.com/api/v1",
+  model: "qwen3-tts-flash",
+  apiKey: "",
+  narratorVoice: "Sunny",
+  defaultVoice: "Cherry",
+  speed: 1,
+  format: "mp3"
+};
+
+const DEFAULT_DOUBAO = {
+  enabled: false,
+  authMode: "classic",
+  endpoint: "https://openspeech.bytedance.com/api/v1/tts",
+  appId: "",
+  accessToken: "",
+  apiKey: "",
+  resourceId: "seed-tts-2.0",
+  cluster: "volcano_tts",
+  voiceType: "BV001_streaming",
+  speed: 1,
+  format: "mp3"
+};
+
+const DEFAULT_DOUBAO_API_ENDPOINT = "https://openspeech.bytedance.com/api/v3/tts/unidirectional";
+
+const DEFAULT_DOUBAO_VOICE = "BV001_streaming";
+const DEFAULT_DOUBAO_API_VOICE = "zh_female_vv_uranus_bigtts";
+
+const DEFAULT_ROLE_VOICES = {
+  DeepSeek: "Ethan",
+  GPT: "Cherry",
+  Claude: "Serena",
+  Kimi: "Chelsie",
+  "豆包": "Dylan",
+  "千问": "Jada"
+};
+
 const DEFAULT_ROLES = [
   {
     name: "DeepSeek",
@@ -94,6 +134,14 @@ function clampText(value, max, fallback) {
   return (text || fallback || "").slice(0, max);
 }
 
+function headerSafeText(value, max, fallback, label) {
+  const text = clampText(value, max, fallback);
+  if (text && !/^[\x21-\x7e]+$/.test(text)) {
+    throw new Error(label + " 只能包含英文、数字和 ASCII 符号，不能包含中文或空格。");
+  }
+  return text;
+}
+
 function validAvatarUrl(value) {
   const text = String(value || "").trim();
   if (!text) {
@@ -155,6 +203,10 @@ class AdminStore {
             role.portraitUrl = defaultPortraitFor(role.name);
             migrated = true;
           }
+          if (typeof role.voice !== "string" || !role.voice) {
+            role.voice = DEFAULT_ROLE_VOICES[role.name] || DEFAULT_TTS.defaultVoice;
+            migrated = true;
+          }
         }
         if (migrated) {
           this.saveConfig(parsed);
@@ -162,6 +214,84 @@ class AdminStore {
       }
       if (!parsed.music || typeof parsed.music !== "object") {
         parsed.music = this.defaultMusic();
+        this.saveConfig(parsed);
+      }
+      if (!parsed.tts || typeof parsed.tts !== "object") {
+        parsed.tts = this.defaultTts();
+        this.saveConfig(parsed);
+      } else if (parsed.tts.baseUrl === "https://dashscope.aliyuncs.com/compatible-mode/v1") {
+        parsed.tts.baseUrl = DEFAULT_TTS.baseUrl;
+        if (!parsed.tts.model || parsed.tts.model === "qwen-tts") {
+          parsed.tts.model = DEFAULT_TTS.model;
+        }
+        parsed.tts.updatedAt = Date.now();
+        this.saveConfig(parsed);
+      }
+      if (!parsed.doubao || typeof parsed.doubao !== "object") {
+        parsed.doubao = this.defaultDoubao();
+        this.saveConfig(parsed);
+      } else if (!parsed.doubao.authMode) {
+        const appId = String(parsed.doubao.appId || "").trim();
+        const accessToken = String(parsed.doubao.accessToken || "").trim();
+        if (appId && !/^\d{5,}$/.test(appId) && accessToken) {
+          parsed.doubao.authMode = "apikey";
+          parsed.doubao.apiKey = accessToken;
+          parsed.doubao.resourceId = /^seed-/.test(appId) ? appId : "seed-tts-2.0";
+          parsed.doubao.endpoint = DEFAULT_DOUBAO_API_ENDPOINT;
+          parsed.doubao.appId = "";
+          parsed.doubao.accessToken = "";
+        } else {
+          parsed.doubao.authMode = "classic";
+        }
+        this.saveConfig(parsed);
+      }
+      if (parsed.voiceConfigVersion !== 2) {
+        const usedVoices = new Set();
+        const fallbackVoices = ["Ethan", "Cherry", "Serena", "Chelsie", "Dylan", "Jada", "Sunny"];
+        for (const role of parsed.roles) {
+          const preferred = DEFAULT_ROLE_VOICES[role.name];
+          let voice = String(role.voice || "").trim();
+          if (!voice || usedVoices.has(voice)) {
+            voice = preferred && !usedVoices.has(preferred)
+              ? preferred
+              : fallbackVoices.find((item) => !usedVoices.has(item)) || voice;
+            role.voice = voice;
+          }
+          usedVoices.add(voice);
+        }
+        parsed.tts.narratorVoice = DEFAULT_TTS.narratorVoice;
+        parsed.voiceConfigVersion = 2;
+        this.saveConfig(parsed);
+      }
+      if (parsed.voiceConfigVersion !== 3) {
+        for (const role of parsed.roles) {
+          if (!["qwen", "doubao"].includes(role.ttsProvider)) {
+            role.ttsProvider = role.name === "豆包" ? "doubao" : "qwen";
+          }
+          if (role.name === "豆包") {
+            role.ttsProvider = "doubao";
+            if (!/^BV\d+(_V2)?_streaming$/i.test(String(role.voice || ""))) {
+              role.voice = DEFAULT_DOUBAO_VOICE;
+            }
+          }
+        }
+        parsed.voiceConfigVersion = 3;
+        this.saveConfig(parsed);
+      }
+      if (parsed.voiceConfigVersion !== 4) {
+        const useApiKeyDoubao = parsed.doubao && parsed.doubao.authMode === "apikey";
+        for (const role of parsed.roles) {
+          if (role.name !== "豆包" || role.ttsProvider !== "doubao") {
+            continue;
+          }
+          const voice = String(role.voice || "");
+          if (useApiKeyDoubao && !/^(zh_|ICL_)/.test(voice)) {
+            role.voice = DEFAULT_DOUBAO_API_VOICE;
+          } else if (!useApiKeyDoubao && !/^BV\d+(_V2)?_streaming$/i.test(voice)) {
+            role.voice = DEFAULT_DOUBAO_VOICE;
+          }
+        }
+        parsed.voiceConfigVersion = 4;
         this.saveConfig(parsed);
       }
       return parsed;
@@ -180,6 +310,9 @@ class AdminStore {
         updatedAt: Date.now()
       },
       music: this.defaultMusic(),
+      tts: this.defaultTts(),
+      doubao: this.defaultDoubao(),
+      voiceConfigVersion: 4,
       roles: this.defaultRoles()
     };
     this.saveConfig(config);
@@ -197,6 +330,10 @@ class AdminStore {
       avatarEmoji: role.avatarEmoji || "🎲",
       avatarUrl: "",
       portraitUrl: role.portraitUrl,
+      ttsProvider: role.name === "豆包" ? "doubao" : "qwen",
+      voice: role.name === "豆包"
+        ? DEFAULT_DOUBAO_VOICE
+        : (DEFAULT_ROLE_VOICES[role.name] || DEFAULT_TTS.defaultVoice),
       systemPrompt: role.systemPrompt,
       enabled: true,
       order: index,
@@ -212,6 +349,155 @@ class AdminStore {
       enabled: false,
       updatedAt: Date.now()
     };
+  }
+
+  defaultTts() {
+    return Object.assign({}, DEFAULT_TTS, { updatedAt: Date.now() });
+  }
+
+  defaultDoubao() {
+    return Object.assign({}, DEFAULT_DOUBAO, { updatedAt: Date.now() });
+  }
+
+  getTts() {
+    return Object.assign({}, DEFAULT_TTS, this.config.tts || {});
+  }
+
+  publicTts() {
+    const tts = this.getTts();
+    return {
+      enabled: Boolean(tts.enabled),
+      provider: tts.provider || "openai",
+      model: tts.model || DEFAULT_TTS.model,
+      narratorVoice: tts.narratorVoice || DEFAULT_TTS.narratorVoice,
+      defaultVoice: tts.defaultVoice || DEFAULT_TTS.defaultVoice,
+      speed: Math.max(0.5, Math.min(2, Number(tts.speed) || 1)),
+      format: tts.format || DEFAULT_TTS.format
+    };
+  }
+
+  adminTts() {
+    const tts = this.getTts();
+    return Object.assign(this.publicTts(), {
+      baseUrl: tts.baseUrl || DEFAULT_TTS.baseUrl,
+      hasKey: Boolean(tts.apiKey),
+      apiKeyMasked: tts.apiKey ? "••••••••" + String(tts.apiKey).slice(-4) : "",
+      updatedAt: tts.updatedAt || 0
+    });
+  }
+
+  updateTts(input) {
+    const source = input || {};
+    const current = this.getTts();
+    let apiKey = current.apiKey || "";
+    if (source.clearApiKey === true) {
+      apiKey = "";
+    } else if (typeof source.apiKey === "string" && source.apiKey.trim()) {
+      apiKey = source.apiKey.trim().slice(0, 4000);
+    }
+    const speedValue = Number(source.speed === undefined ? current.speed : source.speed);
+    this.config.tts = {
+      enabled: source.enabled === undefined ? Boolean(current.enabled) : Boolean(source.enabled),
+      provider: "openai",
+      baseUrl: clampText(source.baseUrl, 500, current.baseUrl || DEFAULT_TTS.baseUrl),
+      model: clampText(source.model, 160, current.model || DEFAULT_TTS.model),
+      apiKey,
+      narratorVoice: clampText(source.narratorVoice, 60, current.narratorVoice || DEFAULT_TTS.narratorVoice),
+      defaultVoice: clampText(source.defaultVoice, 60, current.defaultVoice || DEFAULT_TTS.defaultVoice),
+      speed: Number.isFinite(speedValue) ? Math.max(0.5, Math.min(2, speedValue)) : 1,
+      format: ["mp3", "wav", "opus", "aac", "flac"].includes(source.format)
+        ? source.format
+        : (current.format || DEFAULT_TTS.format),
+      updatedAt: Date.now()
+    };
+    this.saveConfig();
+    return this.adminTts();
+  }
+
+  getDoubao() {
+    return Object.assign({}, DEFAULT_DOUBAO, this.config.doubao || {});
+  }
+
+  publicDoubao() {
+    const doubao = this.getDoubao();
+    const authMode = doubao.authMode === "apikey" ? "apikey" : "classic";
+    const ready = authMode === "apikey"
+      ? Boolean(doubao.apiKey && doubao.resourceId)
+      : Boolean(doubao.appId && doubao.accessToken);
+    return {
+      enabled: Boolean(doubao.enabled && ready),
+      authMode,
+      cluster: doubao.cluster || DEFAULT_DOUBAO.cluster,
+      voiceType: doubao.voiceType || DEFAULT_DOUBAO.voiceType,
+      speed: Math.max(0.5, Math.min(2, Number(doubao.speed) || 1)),
+      format: doubao.format || DEFAULT_DOUBAO.format
+    };
+  }
+
+  adminDoubao() {
+    const doubao = this.getDoubao();
+    return Object.assign(this.publicDoubao(), {
+      endpoint: doubao.endpoint || DEFAULT_DOUBAO.endpoint,
+      authMode: doubao.authMode === "apikey" ? "apikey" : "classic",
+      appId: doubao.appId || "",
+      hasToken: Boolean(doubao.accessToken),
+      tokenMasked: doubao.accessToken ? "••••••••" + String(doubao.accessToken).slice(-4) : "",
+      resourceId: doubao.resourceId || DEFAULT_DOUBAO.resourceId,
+      hasApiKey: Boolean(doubao.apiKey),
+      apiKeyMasked: doubao.apiKey ? "••••••••" + String(doubao.apiKey).slice(-4) : "",
+      updatedAt: doubao.updatedAt || 0
+    });
+  }
+
+  updateDoubao(input) {
+    const source = input || {};
+    const current = this.getDoubao();
+    const authMode = ["classic", "apikey"].includes(source.authMode)
+      ? source.authMode
+      : (current.authMode === "apikey" ? "apikey" : "classic");
+    let accessToken = current.accessToken || "";
+    if (source.clearAccessToken === true) {
+      accessToken = "";
+    } else if (typeof source.accessToken === "string" && source.accessToken.trim()) {
+      accessToken = source.accessToken.trim().slice(0, 4000);
+    }
+    let apiKey = current.apiKey || "";
+    if (source.clearApiKey === true) {
+      apiKey = "";
+    } else if (typeof source.apiKey === "string" && source.apiKey.trim()) {
+      apiKey = source.apiKey.trim().slice(0, 4000);
+    }
+    const speedValue = Number(source.speed === undefined ? current.speed : source.speed);
+    const endpointFallback = authMode === "apikey" ? DEFAULT_DOUBAO_API_ENDPOINT : DEFAULT_DOUBAO.endpoint;
+    const endpoint = clampText(source.endpoint, 500, current.endpoint || endpointFallback);
+    if (!/^https?:\/\//i.test(endpoint)) {
+      throw new Error("豆包语音接口 URL 必须以 http:// 或 https:// 开头。");
+    }
+    const format = ["mp3", "wav", "ogg_opus"].includes(source.format)
+      ? source.format
+      : (current.format || DEFAULT_DOUBAO.format);
+    let voiceType = clampText(source.voiceType, 80, current.voiceType || DEFAULT_DOUBAO.voiceType);
+    if (authMode === "apikey" && !/^(zh_|ICL_)/.test(voiceType)) {
+      voiceType = DEFAULT_DOUBAO_API_VOICE;
+    } else if (authMode === "classic" && !/^BV\d+(_V2)?_streaming$/i.test(voiceType)) {
+      voiceType = DEFAULT_DOUBAO_VOICE;
+    }
+    this.config.doubao = {
+      enabled: source.enabled === undefined ? Boolean(current.enabled) : Boolean(source.enabled),
+      authMode,
+      endpoint,
+      appId: headerSafeText(source.appId === undefined ? (current.appId || "") : source.appId, 160, "", "AppID"),
+      accessToken: headerSafeText(accessToken, 4000, "", "Access Token"),
+      apiKey: headerSafeText(apiKey, 4000, "", "API Key"),
+      resourceId: headerSafeText(source.resourceId, 160, current.resourceId || DEFAULT_DOUBAO.resourceId, "Resource ID"),
+      cluster: headerSafeText(source.cluster, 80, current.cluster || DEFAULT_DOUBAO.cluster, "Cluster"),
+      voiceType,
+      speed: Number.isFinite(speedValue) ? Math.max(0.5, Math.min(2, speedValue)) : 1,
+      format,
+      updatedAt: Date.now()
+    };
+    this.saveConfig();
+    return this.adminDoubao();
   }
 
   publicMusic() {
@@ -329,6 +615,24 @@ class AdminStore {
     } else if (typeof source.apiKey === "string" && source.apiKey.trim()) {
       apiKey = source.apiKey.trim().slice(0, 4000);
     }
+    const ttsProvider = ["qwen", "doubao"].includes(source.ttsProvider)
+      ? source.ttsProvider
+      : (base.ttsProvider || (name === "豆包" ? "doubao" : "qwen"));
+    const defaultVoice = ttsProvider === "doubao"
+      ? (this.getDoubao().authMode === "apikey" ? DEFAULT_DOUBAO_API_VOICE : DEFAULT_DOUBAO_VOICE)
+      : (DEFAULT_ROLE_VOICES[name] || DEFAULT_TTS.defaultVoice);
+    const voiceFallback = base.ttsProvider === ttsProvider
+      ? (base.voice || defaultVoice)
+      : defaultVoice;
+    let voice = clampText(source.voice, 80, voiceFallback);
+    if (ttsProvider === "doubao") {
+      const doubaoMode = this.getDoubao().authMode;
+      if (doubaoMode === "apikey" && !/^(zh_|ICL_)/.test(voice)) {
+        voice = DEFAULT_DOUBAO_API_VOICE;
+      } else if (doubaoMode !== "apikey" && !/^BV\d+(_V2)?_streaming$/i.test(voice)) {
+        voice = DEFAULT_DOUBAO_VOICE;
+      }
+    }
     const role = {
       id: base.id || "ai-" + crypto.randomUUID(),
       name,
@@ -341,6 +645,8 @@ class AdminStore {
       portraitUrl: source.portraitUrl === undefined
         ? (base.portraitUrl || defaultPortraitFor(name))
         : (String(source.portraitUrl).trim() || defaultPortraitFor(name)),
+      ttsProvider,
+      voice,
       systemPrompt: source.systemPrompt === undefined
         ? (base.systemPrompt || defaultPromptFor(name))
         : String(source.systemPrompt).slice(0, 4000),
@@ -411,6 +717,10 @@ class AdminStore {
       avatarEmoji: role.avatarEmoji,
       avatarUrl: role.avatarUrl,
       portraitUrl: role.portraitUrl,
+      ttsProvider: role.ttsProvider || (role.name === "豆包" ? "doubao" : "qwen"),
+      voice: role.voice || (role.ttsProvider === "doubao"
+        ? DEFAULT_DOUBAO_VOICE
+        : (DEFAULT_ROLE_VOICES[role.name] || DEFAULT_TTS.defaultVoice)),
       systemPrompt: role.systemPrompt,
       enabled: role.enabled,
       hasKey: Boolean(role.apiKey),
@@ -427,7 +737,11 @@ class AdminStore {
       model: role.model,
       avatarEmoji: role.avatarEmoji,
       avatarUrl: role.avatarUrl,
-      portraitUrl: role.portraitUrl
+      portraitUrl: role.portraitUrl,
+      ttsProvider: role.ttsProvider || (role.name === "豆包" ? "doubao" : "qwen"),
+      voice: role.voice || (role.ttsProvider === "doubao"
+        ? DEFAULT_DOUBAO_VOICE
+        : (DEFAULT_ROLE_VOICES[role.name] || DEFAULT_TTS.defaultVoice))
     };
   }
 }

@@ -291,7 +291,8 @@ class RoomStore {
           name: role.name,
           avatarEmoji: role.avatarEmoji,
           avatarUrl: role.avatarUrl,
-          portraitUrl: role.portraitUrl
+          portraitUrl: role.portraitUrl,
+          voice: role.voice || ""
         });
       }
     }
@@ -301,7 +302,8 @@ class RoomStore {
         name: role.name,
         avatarEmoji: role.avatarEmoji,
         avatarUrl: role.avatarUrl,
-        portraitUrl: role.portraitUrl
+        portraitUrl: role.portraitUrl,
+        voice: role.voice || ""
       }));
     }
     return roles;
