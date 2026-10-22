@@ -74,6 +74,8 @@ const app = {
   musicUserEnabled: true,
   ttsConfig: null,
   voicePrefetch: new Map(),
+  voiceRequests: new Set(),
+  cancelCurrentVoice: null,
   voices: [],
   voiceQueue: [],
   voiceMetrics: { started: 0, completed: 0, fallbacks: 0 },
@@ -2670,6 +2672,10 @@ function updateVoiceToggle() {
 function resetVoiceRuntime() {
   app.voiceEpoch += 1;
   app.voiceGeneration += 1;
+  if (app.cancelCurrentVoice) app.cancelCurrentVoice();
+  app.cancelCurrentVoice = null;
+  for (const controller of app.voiceRequests) controller.abort();
+  app.voiceRequests.clear();
   for (const timer of app.voiceTimers) {
     clearTimeout(timer);
   }
@@ -2770,6 +2776,7 @@ function releaseCurrentVoiceAudio() {
   if (audio) {
     audio.onended = null;
     audio.onerror = null;
+    audio.onplaying = null;
     try {
       audio.pause();
     } catch (error) {
@@ -2802,14 +2809,14 @@ function prefetchVoice(item) {
   const epoch = app.voiceEpoch;
   const entry = { url: "", promise: null, epoch };
   entry.promise = fetchRemoteVoiceUrl(item).then((url) => {
-    if (epoch !== app.voiceEpoch || app.voicePrefetch.get(key) !== entry) {
+    if (epoch !== app.voiceEpoch || (!entry.taken && app.voicePrefetch.get(key) !== entry)) {
       URL.revokeObjectURL(url);
       return null;
     }
     entry.url = url;
     return url;
   }).catch(() => {
-    app.voicePrefetch.delete(key);
+    if (app.voicePrefetch.get(key) === entry) app.voicePrefetch.delete(key);
     return null;
   });
   app.voicePrefetch.set(key, entry);
@@ -2829,6 +2836,7 @@ function takePrefetchedVoice(item) {
   if (!entry) {
     return null;
   }
+  entry.taken = true;
   app.voicePrefetch.delete(key);
   return entry.promise || entry.url || null;
 }
@@ -2843,38 +2851,47 @@ function clearVoicePrefetch() {
 }
 
 async function fetchRemoteVoiceUrl(item) {
-  const response = await fetch("/api/tts", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    cache: "no-store",
-    body: JSON.stringify({
-      roomCode: app.roomCode,
-      playerId: app.playerId,
-      token: app.playerToken,
-      text: item.text,
-      voice: item.voice,
-      roleId: item.roleId || ""
-    })
-  });
-  if (!response.ok) {
-    let detail = "";
-    try {
-      const payload = await response.json();
-      detail = payload.error || "";
-    } catch (error) {
-      detail = "";
+  const controller = new AbortController();
+  app.voiceRequests.add(controller);
+  const timeout = setTimeout(() => controller.abort(), 10000);
+  try {
+    const response = await fetch("/api/tts", {
+      signal: controller.signal,
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      cache: "no-store",
+      body: JSON.stringify({
+        roomCode: app.roomCode,
+        playerId: app.playerId,
+        token: app.playerToken,
+        text: item.text,
+        voice: item.voice,
+        roleId: item.roleId || ""
+      })
+    });
+    if (!response.ok) {
+      let detail = "";
+      try {
+        const payload = await response.json();
+        detail = payload.error || "";
+      } catch (error) {
+        detail = "";
+      }
+      throw new Error(detail || "大模型语音合成失败。");
     }
-    throw new Error(detail || "大模型语音合成失败。");
+    const contentType = String(response.headers.get("content-type") || "").toLowerCase();
+    if (!contentType.startsWith("audio/") && !contentType.includes("application/octet-stream")) {
+      throw new Error("大模型语音返回了无效格式。");
+    }
+    const blob = await response.blob();
+    if (!blob.size) {
+      throw new Error("大模型语音返回了空音频。");
+    }
+    return URL.createObjectURL(blob);
+  } finally {
+    clearTimeout(timeout);
+    app.voiceRequests.delete(controller);
   }
-  const contentType = String(response.headers.get("content-type") || "").toLowerCase();
-  if (!contentType.startsWith("audio/") && !contentType.includes("application/octet-stream")) {
-    throw new Error("大模型语音返回了无效格式。");
-  }
-  const blob = await response.blob();
-  if (!blob.size) {
-    throw new Error("大模型语音返回了空音频。");
-  }
-  return URL.createObjectURL(blob);
 }
 
 function playBrowserVoice(item, finish) {
@@ -2921,20 +2938,13 @@ function handlePendingSpeech(state) {
     return;
   }
   clearTimeout(app.speechWatchdog);
-  const maxMs = Math.max(70000, Math.min(110000, Array.from(pending.text || "").length * 450 + 35000));
-  const checkSpeechFinished = () => {
+  const maxMs = Math.max(25000, Math.min(60000, Array.from(pending.text || "").length * 250 + 20000));
+  app.speechWatchdog = setTimeout(() => {
     app.speechWatchdog = null;
-    if (app.activeSpeechId !== pending.id) {
-      return;
-    }
-    if (app.speaking || (window.speechSynthesis && window.speechSynthesis.speaking)) {
-      app.speechWatchdog = setTimeout(checkSpeechFinished, 15000);
-      return;
-    }
+    if (app.activeSpeechId !== pending.id) return;
     resetVoiceRuntime();
     acknowledgeSpeech(pending.id);
-  };
-  app.speechWatchdog = setTimeout(checkSpeechFinished, maxMs);
+  }, maxMs);
   app.activeSpeechId = pending.id;
   speak(pending.text, roleEmotion(pending.playerName), pending.playerName, "high", done);
 }
@@ -2983,14 +2993,16 @@ function speak(text, emotion, roleName, priority, onEnd) {
     return;
   }
   const profile = resolveTtsProfile(roleName || "");
-  app.voiceQueue.push({
+  const item = {
     text: clean,
     emotion: emotion || "calm",
     roleName: roleName || "",
     voice: profile.voice,
     roleId: profile.roleId,
     onEnd
-  });
+  };
+  if (priority === "high") app.voiceQueue.unshift(item);
+  else app.voiceQueue.push(item);
   drainVoiceQueue();
 }
 
@@ -3003,19 +3015,27 @@ function drainVoiceQueue() {
   const epoch = app.voiceEpoch;
   const item = app.voiceQueue.shift();
   app.currentVoiceItem = item;
+  app.voiceMetrics.started += 1;
   let settled = false;
   let fallbackStarted = false;
   let watchdog = null;
+  let startTimer = null;
+  app.cancelCurrentVoice = () => {
+    settled = true;
+    clearTimeout(watchdog);
+    clearTimeout(startTimer);
+  };
   const finish = () => {
     if (settled) {
       return;
     }
     settled = true;
     clearTimeout(watchdog);
+    clearTimeout(startTimer);
+    if (epoch !== app.voiceEpoch) return;
+    app.cancelCurrentVoice = null;
+    app.voiceMetrics.completed += 1;
     releaseCurrentVoiceAudio();
-    if (epoch !== app.voiceEpoch) {
-      return;
-    }
     if (app.currentVoiceItem === item) {
       app.currentVoiceItem = null;
     }
@@ -3036,11 +3056,12 @@ function drainVoiceQueue() {
       return;
     }
     fallbackStarted = true;
+    clearTimeout(startTimer);
     app.voiceMetrics.fallbacks += 1;
     releaseCurrentVoiceAudio();
     playBrowserVoice(item, finish);
   };
-  const maxMs = Math.max(45000, Math.min(120000, Array.from(item.text).length * 450 + 30000));
+  const maxMs = Math.max(18000, Math.min(45000, Array.from(item.text).length * 250 + 15000));
   watchdog = setTimeout(() => {
     releaseCurrentVoiceAudio();
     try {
@@ -3056,10 +3077,11 @@ function drainVoiceQueue() {
   }
   const prefetched = takePrefetchedVoice(item);
   const requestUrl = prefetched
-    ? Promise.resolve(prefetched).then((url) => url || fetchRemoteVoiceUrl(item))
+    ? Promise.resolve(prefetched).then((url) => url || (!settled && epoch === app.voiceEpoch ? fetchRemoteVoiceUrl(item) : null))
     : fetchRemoteVoiceUrl(item);
   requestUrl.then((url) => {
-    if (settled || epoch !== app.voiceEpoch) {
+    if (!url) return;
+    if (settled || fallbackStarted || epoch !== app.voiceEpoch) {
       URL.revokeObjectURL(url);
       return;
     }
@@ -3069,6 +3091,8 @@ function drainVoiceQueue() {
     audio.preload = "auto";
     audio.onended = finish;
     audio.onerror = fallback;
+    startTimer = setTimeout(fallback, 2500);
+    audio.onplaying = () => clearTimeout(startTimer);
     const playback = audio.play();
     if (playback && typeof playback.catch === "function") {
       playback.catch(fallback);
