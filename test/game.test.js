@@ -214,6 +214,8 @@ test("when every hand is empty only challenge remains and the final challenge en
   assert.equal(result.reveal.truthful, true);
   assert.equal(room.phase, "gameover");
   assert.equal(room.winnerId, player.id);
+  assert.equal(result.reveal.shot, false);
+  assert.ok(room.players.every((seat) => seat.alive), "Losing the final challenge does not kill a survivor");
 });
 
 test("a shot does not redeal the table and the surviving hands continue", () => {
@@ -371,6 +373,8 @@ test("a lie caught on the final challenge is not counted as a successful decepti
   assert.equal(room.phase, "gameover");
   assert.equal(liar.matchStats.deceptions, 0);
   assert.equal(challenger.matchStats.challengeKills, 1);
+  assert.equal(liar.alive, false);
+  assert.ok(room.players.filter((seat) => seat !== liar).every((seat) => seat.alive));
 });
 
 test("AI hands are revealed only after every seated human is eliminated", () => {

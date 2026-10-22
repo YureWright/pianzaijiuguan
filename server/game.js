@@ -611,11 +611,6 @@ function finishGame(room, winner, reason) {
   room.roundResult = reason || (winner
     ? winner.name + " 成为了酒馆里最后的活人。"
     : "酒馆归于沉寂。");
-  for (const player of room.players) {
-    if (player.occupied) {
-      player.alive = Boolean(winner && player.id === winner.id);
-    }
-  }
   captureRoundThoughts(room);
   addLog(room, "gameover", room.roundResult, {
     winnerId: room.winnerId,

@@ -7,6 +7,7 @@ const os = require("node:os");
 const path = require("node:path");
 const { AccountStore } = require("../server/accounts");
 const { RoomStore } = require("../server/rooms");
+const game = require("../server/game");
 
 function tempStore() {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "liars-accounts-"));
@@ -102,6 +103,46 @@ test("usernames are unique across locations and a death forces a rename", () => 
     assert.equal(store.byId("shanghai").stats.gamesPlayed, 0);
     assert.equal(store.byId("hangzhou").username, "");
     assert.deepEqual(store.leaderboard([{ id: "ai-deepseek", name: "DeepSeek" }]).users, []);
+  } finally {
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+test("a final AI challenge records human losses without deaths or forced renames", () => {
+  const { store, dataDir } = tempStore();
+  try {
+    const room = game.createRoom("FINAL");
+    for (const [accountId, username] of [["shanghai", "外滩老千"], ["hangzhou", "西湖牌客"]]) {
+      const login = store.login(accountId, accountId + "-test-key");
+      assert.equal(store.setUsername(login.token, username).ok, true);
+      game.addHuman(room, accountId + "-player", username, { accountId });
+    }
+    game.startGame(room, { starterSeat: 2, rng: () => 0.42 });
+    for (const player of room.players) {
+      player.hand = [];
+      player.gun = { chamber: 0, bullet: 2 };
+    }
+    const accused = room.players[2];
+    const challenger = room.players[3];
+    room.tableRank = "J";
+    accused.hand = [{ id: "K-final", rank: "K", suit: "♠", wild: false }];
+    assert.equal(game.performAction(room, accused.id, { type: "play", cardIds: ["K-final"] }).ok, true);
+    const result = game.performAction(room, challenger.id, { type: "challenge" });
+    assert.equal(result.reveal.shot, false);
+    assert.equal(room.phase, "gameover");
+    assert.equal(room.winnerId, challenger.id);
+    assert.equal(store.recordGame(room), true);
+    assert.equal(store.recordGame(room), false, "A result is recorded only once");
+
+    const reloaded = new AccountStore({ dataDir });
+    for (const accountId of ["shanghai", "hangzhou"]) {
+      const account = reloaded.byId(accountId);
+      assert.equal(account.stats.gamesPlayed, 1);
+      assert.equal(account.stats.wins, 0);
+      assert.equal(account.stats.deaths, 0);
+      assert.equal(account.pendingRename, false);
+      assert.equal(room.players.find((player) => player.accountId === accountId).alive, true);
+    }
   } finally {
     fs.rmSync(dataDir, { recursive: true, force: true });
   }
