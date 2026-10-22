@@ -98,6 +98,7 @@ const app = {
   victoryTimer: null,
   victoryCountdownTimer: null,
   victoryClosed: false,
+  settlementFinishing: false,
   pendingDeathId: null,
   deathVisualApplied: false
 };
@@ -564,10 +565,10 @@ function showVictorySettlement(state) {
       if (right.id === state.winnerId) return 1;
       return left.seat - right.seat;
     });
-  $("victory-ranking").innerHTML = ranked.map((player, index) => {
+  $("victory-ranking").innerHTML = ranked.map((player) => {
     const isWinner = player.id === state.winnerId;
     return "<div class=\"victory-row" + (isWinner ? " winner" : "") + "\">" +
-      "<span class=\"victory-place\">" + (isWinner ? "♛" : String(index + 1).padStart(2, "0")) + "</span>" +
+      "<span class=\"victory-place\">" + (isWinner ? "♛" : "席" + (player.seat + 1)) + "</span>" +
       "<span class=\"victory-row-name\">" + escapeHtml(player.name) + "</span>" +
       "<span class=\"victory-row-tag\">" + (isWinner ? "胜者" : (player.alive ? "存活" : "出局")) + "</span></div>";
   }).join("");
@@ -590,6 +591,9 @@ async function finishVictorySettlement() {
     return;
   }
   app.victoryClosed = true;
+  app.settlementFinishing = true;
+  const settlementKey = app.victoryShowKey;
+  if (app.room) renderActionBar(app.room);
   clearTimeout(app.victoryTimer);
   clearInterval(app.victoryCountdownTimer);
   app.victoryTimer = null;
@@ -598,13 +602,17 @@ async function finishVictorySettlement() {
   if (dialog && dialog.open) {
     dialog.close();
   }
-  await new Promise((resolve) => setTimeout(resolve, 260));
-  if (!app.sessionToken) {
-    return;
-  }
-  const account = await refreshAccount();
-  if (account && account.pendingRename) {
-    openUsernameDialog(true);
+  try {
+    await new Promise((resolve) => setTimeout(resolve, 260));
+    if (!app.sessionToken) return;
+    const account = await refreshAccount();
+    if (settlementKey !== app.victoryShowKey || !app.room || app.room.phase !== "gameover") return;
+    if (account && account.pendingRename) openUsernameDialog(true);
+  } finally {
+    if (settlementKey === app.victoryShowKey) {
+      app.settlementFinishing = false;
+      if (app.room) renderActionBar(app.room);
+    }
   }
 }
 
@@ -1078,6 +1086,17 @@ function handleState(state) {
   const previous = app.room;
   const isFirst = !previous;
   const previousPhase = previous ? previous.phase : null;
+  if (state.phase === "gameover" && previousPhase !== "gameover") app.victoryClosed = false;
+  if (previousPhase === "gameover" && state.phase !== "gameover") {
+    app.victoryClosed = true;
+    app.settlementFinishing = false;
+    app.pendingVictoryState = null;
+    app.victoryShowKey = "";
+    clearTimeout(app.victoryTimer);
+    clearInterval(app.victoryCountdownTimer);
+    const victory = $("victory-dialog");
+    if (victory && victory.open) victory.close();
+  }
   if (previous && ["playing", "out_challenge"].includes(previous.phase) && state.phase === "lobby") {
     resetAfterVoid();
   }
@@ -2118,7 +2137,11 @@ function renderActionBar(state) {
     return;
   }
   if (state.phase === "gameover") {
-    if (state.canRestart) {
+    if (!app.victoryClosed || app.settlementFinishing || app.fxAnimating || app.animationQueue.length > 0) {
+      experience.render(bar, "<span class=\"action-hint\">正在结算本局，稍后可开始下一局。</span>");
+    } else if (app.account && app.account.pendingRename) {
+      experience.render(bar, "<span class=\"action-hint\">请先更换用户名，再开始下一局。</span>");
+    } else if (state.canRestart) {
       experience.render(bar, "<button class=\"action-button play\" type=\"button\" data-action=\"restart\">开始下一局</button>");
     } else {
       experience.render(bar, "<span class=\"action-hint\">牌局结束 · 等待房主开始下一局</span>");

@@ -101,6 +101,34 @@ test("a synthesis timeout aborts the request and starts browser fallback", async
   assert.equal(fallbacks, 1);
   assert.equal(c.app.voiceRequests.size, 0);
 });
+
+test("next game stays unavailable until settlement and account refresh finish", async () => {
+  const c = client();
+  const bar = { innerHTML: "" };
+  const dialog = { open: true, close() { this.open = false; } };
+  c.context.document.getElementById = id => id === "action-bar" ? bar : dialog;
+  c.context.window.TavernExperience.render = (element, html) => { element.innerHTML = html; };
+  c.context.clearInterval = () => {};
+  Object.assign(c.app, { connected: true, sessionToken: "test", room: { phase: "gameover", canRestart: true }, victoryShowKey: "game-1" });
+  c.run('renderActionBar(app.room);');
+  assert.ok(!bar.innerHTML.includes('data-action="restart"'));
+  let finishRefresh;
+  c.context.refreshAccount = () => new Promise(resolve => { finishRefresh = resolve; });
+  const finished = c.run('finishVictorySettlement();');
+  assert.equal(dialog.open, false);
+  c.timers.find(timer => timer.ms === 260).fn();
+  await flush();
+  c.run('renderActionBar(app.room);');
+  assert.ok(!bar.innerHTML.includes('data-action="restart"'));
+  finishRefresh({ pendingRename: false });
+  await finished;
+  assert.ok(bar.innerHTML.includes('data-action="restart"'));
+  c.app.account = { pendingRename: true };
+  c.run('renderActionBar(app.room);');
+  assert.ok(!bar.innerHTML.includes('data-action="restart"'));
+  assert.ok(bar.innerHTML.includes("更换用户名"));
+});
+
 test("cancelling a consumed prefetch cannot start a replacement synthesis request", async () => {
   const c = client();
   let calls = 0;
