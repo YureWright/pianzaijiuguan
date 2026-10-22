@@ -9,8 +9,8 @@ const ROOM_TTL_MS = 3 * 60 * 60 * 1000;
 const AUTOPILOT_DELAY_MS = 9000;
 const LOBBY_DISCONNECT_TTL_MS = 20000;
 const HUMAN_TURN_MS = 30000;
-const AI_THINK_MIN_MS = 5000;
-const AI_THINK_MAX_MS = 10000;
+const AI_THINK_MIN_MS = 1200;
+const AI_THINK_MAX_MS = 2400;
 const MAIN_TABLE_CODE = "MAIN";
 
 function estimateSpeechDuration(text) {
@@ -479,11 +479,12 @@ class RoomStore {
     }
     this.clients.get(code).set(connectionId, {
       response,
-      viewerId: viewer ? viewer.id : viewerId,
+      // Only an authenticated player may select a private point of view.
+      viewerId: viewer ? viewer.id : null,
       playerId: viewer ? viewer.id : null
     });
     response.write("retry: 1500\n\n");
-    this.sendState(room, response, viewer ? viewer.id : viewerId);
+    this.sendState(room, response, viewer ? viewer.id : null);
     this.broadcast(room);
     this.afterChange(room);
     response.on("close", () => {
@@ -508,6 +509,12 @@ class RoomStore {
         room.pendingSpeech.requiredAcks = room.pendingSpeech.requiredAcks.filter((id) => id !== viewer.id);
         if (room.pendingSpeech.requiredAcks.length === 0) {
           this.releaseSpeech(room, room.pendingSpeech.id);
+        }
+      }
+      if (room.pendingCinematic && Array.isArray(room.pendingCinematic.requiredAcks)) {
+        room.pendingCinematic.requiredAcks = room.pendingCinematic.requiredAcks.filter((id) => id !== viewer.id);
+        if (room.pendingCinematic.requiredAcks.length === 0) {
+          this.releaseCinematic(room, room.pendingCinematic.id);
         }
       }
       if (room.phase === "lobby") {
@@ -620,14 +627,15 @@ class RoomStore {
     room.pendingCinematic = {
       id: cinematicId,
       startedAt: Date.now(),
-      fallbackAt: Date.now() + 30000
+      fallbackAt: Date.now() + 15000,
+      requiredAcks: room.players.filter((player) => player.occupied && !player.isAI && player.connected).map((player) => player.id)
     };
     room.turnGateUntil = room.pendingCinematic.fallbackAt;
     room.turnGateReason = "cinematic";
     room.cinematicTimer = setTimeout(() => {
       room.cinematicTimer = null;
       this.releaseCinematic(room, cinematicId);
-    }, 30000);
+    }, 15000);
     if (room.cinematicTimer.unref) {
       room.cinematicTimer.unref();
     }
@@ -659,7 +667,10 @@ class RoomStore {
     if (room.pendingCinematic.id !== String(cinematicId || "")) {
       return { error: "处决动画状态已经变化。" };
     }
-    this.releaseCinematic(room, room.pendingCinematic.id);
+    room.pendingCinematic.requiredAcks = room.pendingCinematic.requiredAcks.filter((id) => id !== playerId);
+    if (room.pendingCinematic.requiredAcks.length === 0) {
+      this.releaseCinematic(room, room.pendingCinematic.id);
+    }
     return { ok: true };
   }
 

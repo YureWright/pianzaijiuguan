@@ -5,6 +5,31 @@ const crypto = require("node:crypto");
 const CACHE_LIMIT = 120;
 const cache = new Map();
 const inFlight = new Map();
+const MAX_CONCURRENT = 1;
+let activeRequests = 0;
+const requestQueue = [];
+
+function acquireRequestSlot() {
+  return new Promise((resolve) => {
+    const grant = () => {
+      activeRequests += 1;
+      resolve();
+    };
+    if (activeRequests < MAX_CONCURRENT) {
+      grant();
+    } else {
+      requestQueue.push(grant);
+    }
+  });
+}
+
+function releaseRequestSlot() {
+  activeRequests = Math.max(0, activeRequests - 1);
+  const next = requestQueue.shift();
+  if (next) {
+    next();
+  }
+}
 
 function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -195,6 +220,7 @@ async function synthesize(settings, options) {
     return inFlight.get(key);
   }
   const task = (async () => {
+    await acquireRequestSlot();
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), opts.timeoutMs || 30000);
     try {
@@ -222,6 +248,7 @@ async function synthesize(settings, options) {
       return result;
     } finally {
       clearTimeout(timeout);
+      releaseRequestSlot();
     }
   })();
   inFlight.set(key, task);

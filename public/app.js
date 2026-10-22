@@ -1,5 +1,7 @@
 "use strict";
 
+const experience = window.TavernExperience;
+
 const SEAT_POSITIONS = ["bottom", "left", "top", "right"];
 const PROVIDER_DEFAULTS = {
   openai: "https://api.openai.com/v1",
@@ -27,6 +29,11 @@ const app = {
   room: null,
   eventSource: null,
   selected: new Set(),
+  handSorted: false,
+  actionPending: false,
+  actionRequestId: 0,
+  connected: false,
+  serverOffset: 0,
   profiles: [],
   serverModelNames: [],
   aiRoles: [],
@@ -39,6 +46,7 @@ const app = {
   remoteId: null,
   remoteSeat: null,
   remoteStream: null,
+  remoteCameraOn: false,
   polite: false,
   makingOffer: false,
   ignoreOffer: false,
@@ -56,13 +64,14 @@ const app = {
   toastTimer: null,
   audioContext: null,
   eventErrorTimer: null,
-  voiceEnabled: true,
+  voiceEnabled: experience.preferences.narration !== "off",
   musicConfig: null,
   musicUserEnabled: true,
   ttsConfig: null,
   voicePrefetch: new Map(),
   voices: [],
   voiceQueue: [],
+  voiceMetrics: { started: 0, completed: 0, fallbacks: 0 },
   speaking: false,
   voiceGeneration: 0,
   voiceEpoch: 0,
@@ -111,12 +120,22 @@ function formatTime(timestamp) {
 
 async function apiRequest(path, options) {
   const opts = options || {};
-  const response = await fetch(path, {
-    method: opts.method || "GET",
-    headers: opts.body ? { "Content-Type": "application/json" } : undefined,
-    body: opts.body ? JSON.stringify(opts.body) : undefined,
-    cache: "no-store"
-  });
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 12000);
+  let response;
+  try {
+    response = await fetch(path, {
+      method: opts.method || "GET",
+      headers: opts.body ? { "Content-Type": "application/json" } : undefined,
+      body: opts.body ? JSON.stringify(opts.body) : undefined,
+      cache: "no-store",
+      signal: controller.signal
+    });
+  } catch (error) {
+    throw new Error(error.name === "AbortError" ? "响应有点慢，请稍后重试。" : "连接暂时中断，请检查网络。");
+  } finally {
+    clearTimeout(timeout);
+  }
   let payload = {};
   try {
     payload = await response.json();
@@ -301,7 +320,7 @@ async function loginAccount(event) {
     saveSessionToken(payload.sessionToken);
     setAccount(payload.account);
     $("login-key").value = "";
-    if (payload.account.needsUsername || payload.account.pendingRename) {
+    if (payload.account.needsUsername) {
       app.pendingEnterAfterName = true;
       openUsernameDialog(Boolean(payload.account.pendingRename));
     } else {
@@ -495,11 +514,11 @@ function showVictorySettlement(state) {
     return "<div class=\"victory-row" + (isWinner ? " winner" : "") + "\">" +
       "<span class=\"victory-place\">" + (isWinner ? "♛" : String(index + 1).padStart(2, "0")) + "</span>" +
       "<span class=\"victory-row-name\">" + escapeHtml(player.name) + "</span>" +
-      "<span class=\"victory-row-tag\">" + (isWinner ? "胜者" : (player.isAI ? "AI 淘汰" : "淘汰")) + "</span></div>";
+      "<span class=\"victory-row-tag\">" + (isWinner ? "胜者" : (player.alive ? "存活" : "出局")) + "</span></div>";
   }).join("");
   clearTimeout(app.victoryTimer);
   clearInterval(app.victoryCountdownTimer);
-  let remaining = 15;
+  let remaining = 12;
   $("victory-countdown").textContent = remaining + "s";
   app.victoryCountdownTimer = setInterval(() => {
     remaining = Math.max(0, remaining - 1);
@@ -508,7 +527,7 @@ function showVictorySettlement(state) {
   if (!dialog.open) {
     dialog.showModal();
   }
-  app.victoryTimer = setTimeout(finishVictorySettlement, 15000);
+  app.victoryTimer = setTimeout(finishVictorySettlement, 12000);
 }
 
 async function finishVictorySettlement() {
@@ -773,6 +792,11 @@ function wireModelSettings() {
 }
 
 function resetHome() {
+  document.body.dataset.page = "home";
+  app.connected = false;
+  app.actionPending = false;
+  app.actionRequestId += 1;
+  $("connection-banner").hidden = true;
   app.room = null;
   app.roomCode = null;
   app.playerId = null;
@@ -820,6 +844,7 @@ function resetHome() {
 }
 
 function enterRoom(data) {
+  document.body.dataset.page = "room";
   app.roomCode = data.roomCode;
   app.playerId = data.playerId || null;
   app.playerToken = data.playerToken || null;
@@ -834,6 +859,7 @@ function enterRoom(data) {
   $("home-view").hidden = true;
   $("room-view").hidden = false;
   $("room-code-label").textContent = "主桌";
+  window.scrollTo({ top: 0, behavior: "instant" });
   $("copy-code").hidden = true;
   if (data.account) {
     setAccount(data.account);
@@ -939,9 +965,12 @@ function connectEvents() {
   const source = new EventSource("/api/rooms/" + encodeURIComponent(app.roomCode) + "/events?" + params.toString());
   app.eventSource = source;
   source.addEventListener("open", () => {
+    app.connected = true;
+    $("connection-banner").hidden = true;
     clearTimeout(app.eventErrorTimer);
     app.eventErrorTimer = null;
     setConnectionStatus("实时连接", false);
+    if (app.room) renderActionBar(app.room);
   });
   source.addEventListener("state", (event) => {
     try {
@@ -965,12 +994,14 @@ function connectEvents() {
     }
   });
   source.addEventListener("error", () => {
+    app.connected = false;
+    $("connection-banner").hidden = false;
+    if (app.room) renderActionBar(app.room);
     setConnectionStatus("正在重连", true);
     clearTimeout(app.eventErrorTimer);
     app.eventErrorTimer = setTimeout(() => {
       if (app.roomCode && source.readyState !== EventSource.OPEN) {
-        showToast("与牌桌的连接已断开，正在返回首页。", true);
-        leaveRoom(false);
+        setConnectionStatus("连接中断 · 正在重连", true);
       }
     }, 12000);
   });
@@ -982,7 +1013,9 @@ function handleState(state) {
   const previousPhase = previous ? previous.phase : null;
   app.room = state;
   app.roomCode = state.code;
-  if (previous && (state.round !== previous.round || state.phase !== previous.phase || state.turnPlayerId !== previous.turnPlayerId)) {
+  app.serverOffset = (state.serverTime || Date.now()) - Date.now();
+  if (previous && (state.round !== previous.round ||
+    (state.phase !== previous.phase && ["lobby", "gameover", "out_challenge"].includes(state.phase)))) {
     app.selected.clear();
   }
   if (state.me) {
@@ -1000,9 +1033,7 @@ function handleState(state) {
   if (isFirst) {
     app.lastLogId = state.log.length > 0 ? state.log[state.log.length - 1].id : null;
     app.lastRevealId = state.lastReveal ? state.lastReveal.id : null;
-    if (state.phase === "gameover") {
-      queueVictorySettlement(state);
-    }
+    if (state.phase === "gameover") queueVictorySettlement(state);
     return;
   }
 
@@ -1028,7 +1059,7 @@ function handleState(state) {
       });
     } else if ((entry.type === "challenge" || entry.type === "death") && !revealQueued &&
       state.lastReveal && state.lastReveal.id !== app.lastRevealId) {
-      enqueueChallengeFx(state.lastReveal, state.pendingSpeech);
+      enqueueChallengeFx(state.lastReveal, state.pendingSpeech, state.cinematicId);
       revealQueued = true;
     } else if (entry.type === "gameover") {
       enqueueFx({
@@ -1039,7 +1070,7 @@ function handleState(state) {
     }
   }
   if (state.lastReveal && state.lastReveal.id !== app.lastRevealId && !revealQueued) {
-    enqueueChallengeFx(state.lastReveal, state.pendingSpeech);
+    enqueueChallengeFx(state.lastReveal, state.pendingSpeech, state.cinematicId);
   }
   if (state.phase === "gameover" && previousPhase !== "gameover" &&
     !newLogEntries(state).some((entry) => entry.type === "gameover")) {
@@ -1051,9 +1082,7 @@ function handleState(state) {
   }
   app.lastRevealId = state.lastReveal ? state.lastReveal.id : app.lastRevealId;
   app.lastLogId = state.log.length > 0 ? state.log[state.log.length - 1].id : app.lastLogId;
-  if (state.phase === "gameover") {
-    queueVictorySettlement(state);
-  }
+  if (state.phase === "gameover") queueVictorySettlement(state);
   maybeShowVictorySettlement();
 }
 
@@ -1095,8 +1124,11 @@ function waitForNarrationEnd() {
     return Promise.resolve();
   }
   return new Promise((resolve) => {
+    const started = Date.now();
+    const generation = app.fxGeneration;
     const check = () => {
-      if (!app.speaking && !app.currentVoiceItem && app.voiceQueue.length === 0 && app.voiceTimers.length === 0) {
+      if (generation !== app.fxGeneration || Date.now() - started > 6500 ||
+        (!app.speaking && !app.currentVoiceItem && app.voiceQueue.length === 0 && app.voiceTimers.length === 0)) {
         resolve();
         return;
       }
@@ -1109,11 +1141,6 @@ function waitForNarrationEnd() {
 async function acknowledgeCinematic(cinematicId) {
   if (!cinematicId) {
     return;
-  }
-  if (app.room && app.room.cinematicId === cinematicId) {
-    app.room.cinematicId = null;
-    app.room.turnGateReason = null;
-    app.room.turnGateUntil = null;
   }
   if (!app.playerId || !app.playerToken || !app.roomCode) {
     return;
@@ -1132,7 +1159,7 @@ async function acknowledgeCinematic(cinematicId) {
   }
 }
 
-function enqueueChallengeFx(reveal, pending) {
+function enqueueChallengeFx(reveal, pending, cinematicId) {
   if (reveal.shot) {
     app.pendingDeathId = reveal.loserId;
     app.deathVisualApplied = false;
@@ -1144,7 +1171,7 @@ function enqueueChallengeFx(reveal, pending) {
     pending.playerId === reveal.challengerId);
   enqueueFx({ type: "challenge", reveal, suppressSpeech });
   enqueueFx({ type: "reveal", reveal, suppressSpeech });
-  enqueueFx({ type: "execution", reveal, suppressSpeech: true });
+  enqueueFx({ type: "execution", reveal, cinematicId, suppressSpeech: true });
 }
 
 function getTableEffectLayer() {
@@ -1170,6 +1197,7 @@ function tablePoint(rect, stageRect) {
 }
 
 async function runPlayTableEffect(event, layer) {
+  const generation = app.fxGeneration;
   const stage = $("table-stage");
   const targetEl = $("center-panel");
   if (!stage || !targetEl) {
@@ -1199,12 +1227,15 @@ async function runPlayTableEffect(event, layer) {
   stamp.className = "table-action-stamp";
   stamp.innerHTML = "<b>" + count + "</b><span>张 · 宣称 " + escapeHtml(event.claimRank) + "</span>";
   layer.appendChild(stamp);
-  await new Promise((resolve) => setTimeout(resolve, 1850));
+  experience.accelerate(layer, 2);
+  await new Promise((resolve) => setTimeout(resolve, experience.duration(950, 160)));
+  if (generation !== app.fxGeneration) return;
   stage.classList.remove("cards-in-flight");
   layer.innerHTML = "";
 }
 
 async function runChallengeTableEffect(event, layer) {
+  const generation = app.fxGeneration;
   const reveal = event.reveal;
   layer.innerHTML = [
     "<div class=\"table-challenge-impact\">",
@@ -1216,11 +1247,14 @@ async function runChallengeTableEffect(event, layer) {
   if (app.room) {
     flashSeat(reveal.challengerId, "action-flash");
   }
-  await new Promise((resolve) => setTimeout(resolve, 1250));
+  experience.accelerate(layer, 2);
+  await new Promise((resolve) => setTimeout(resolve, experience.duration(650, 180)));
+  if (generation !== app.fxGeneration) return;
   layer.innerHTML = "";
 }
 
 async function runRevealTableEffect(event, layer) {
+  const generation = app.fxGeneration;
   const reveal = event.reveal;
   const cards = reveal.cards.map((card, index) => {
     return "<div class=\"fx-flip-card\" style=\"--delay:" + (index * 130) + "ms\">" +
@@ -1240,7 +1274,9 @@ async function runRevealTableEffect(event, layer) {
   if (stage) {
     stage.classList.add("reveal-active");
   }
-  await new Promise((resolve) => setTimeout(resolve, 3000));
+  experience.accelerate(layer, 1.5);
+  await new Promise((resolve) => setTimeout(resolve, experience.duration(1800, 950)));
+  if (generation !== app.fxGeneration) return null;
   return stage;
 }
 
@@ -1278,13 +1314,13 @@ async function runTableEffect(event) {
   }
   if (event.type === "round") {
     layer.innerHTML = "<div class=\"table-round-ripple\"></div>";
-    await new Promise((resolve) => setTimeout(resolve, 1500));
+    await new Promise((resolve) => setTimeout(resolve, experience.duration(700, 150)));
     layer.innerHTML = "";
     return;
   }
   if (event.type === "gameover") {
     layer.innerHTML = "<div class=\"table-gameover-glow\"></div>";
-    await new Promise((resolve) => setTimeout(resolve, 1200));
+    await new Promise((resolve) => setTimeout(resolve, experience.duration(650, 150)));
     layer.innerHTML = "";
     return;
   }
@@ -1309,17 +1345,18 @@ async function processFxQueue() {
       const event = app.animationQueue.shift();
       if (event.type === "execution") {
         narrateFx(event);
-        await waitForNarrationEnd();
-        const cinematicId = app.room && app.room.cinematicId;
-        await new Promise((resolve) => setTimeout(resolve, 900));
+        const cinematicId = event.cinematicId;
         overlay.className = "table-fx active fx-execution" +
           (event.reveal.shot ? " shot" : " empty") + (event.reveal.truthful ? " truth" : " lie");
         overlay.setAttribute("aria-hidden", "false");
         overlay.innerHTML = fxMarkup(event);
         prepareFx(event, overlay);
         playFxSound(event);
-        scheduleSpeech(4400, event.reveal.shot ? "中弹。" : "空枪。", event.reveal.shot ? "surprised" : "tease", "", "high");
-        await new Promise((resolve) => setTimeout(resolve, 7000));
+        experience.accelerate(overlay, 2);
+        if (experience.preferences.narration === "key") {
+          scheduleSpeech(experience.duration(2225, 200), event.reveal.shot ? "中弹。" : "空枪。", event.reveal.shot ? "surprised" : "tease", "", "high");
+        }
+        await new Promise((resolve) => setTimeout(resolve, experience.duration(3800, 950)));
         if (generation !== app.fxGeneration) {
           break;
         }
@@ -1361,6 +1398,9 @@ async function processFxQueue() {
   } finally {
     if (generation === app.fxGeneration) {
       app.fxAnimating = false;
+      if (app.room) renderActionBar(app.room);
+      const stage = $("table-stage");
+      if (stage) stage.classList.remove("cards-in-flight", "reveal-active");
       maybeShowVictorySettlement();
     }
   }
@@ -1417,13 +1457,15 @@ function prepareFx(event, overlay) {
   }
   if (event.type === "execution") {
     if (event.reveal.shot) {
+      const generation = app.fxGeneration;
       setTimeout(() => {
+        if (generation !== app.fxGeneration) return;
         app.deathVisualApplied = true;
         if (app.room) {
           renderSeats(app.room);
         }
         flashSeat(event.reveal.loserId, "action-shot");
-      }, 4450);
+      }, experience.duration(2225, 200));
     }
   }
 }
@@ -1532,12 +1574,13 @@ function fxMarkup(event) {
     const loser = fxPlayer(reveal.loserId);
     return [
       "<div class=\"fx-panel fx-execution-panel\">",
-      "  <div class=\"fx-kicker\">EXECUTION · 5 SEC</div>",
+      "  <div class=\"fx-kicker\">THE CHAMBER DECIDES</div>",
       "  <div class=\"fx-execution-verdict\">" + (reveal.truthful ? "质疑失败" : "质疑成功") + " · " + escapeHtml(reveal.loserName) + " 受刑</div>",
       "  <div class=\"fx-execution-scene\">",
       fxPortrait(loser, reveal.loserName, "fx-condemned"),
       "    <div class=\"fx-gun-stage\">",
       "      <div class=\"fx-gun\">",
+      "        <img class=\"fx-gun-sprite\" src=\"/assets/revolver.webp\" alt=\"轮盘左轮\" decoding=\"async\">",
       "        <div class=\"fx-gun-barrel\"></div>",
       "        <div class=\"fx-gun-cylinder\"><div class=\"fx-cylinder\">" + chambers + "</div></div>",
       "        <div class=\"fx-gun-grip\"></div>",
@@ -1586,17 +1629,21 @@ function playFxSound(event) {
       playNoiseBurst(0.08, 0.035);
     }, 1500);
   } else if (event.type === "execution") {
-    setTimeout(() => {
+    const generation = app.fxGeneration;
+    const later = (delay, callback) => setTimeout(() => {
+      if (generation === app.fxGeneration) callback();
+    }, experience.duration(delay / 2, Math.min(200, delay / 2)));
+    later(700, () => {
       playTone(92, 0.12, "sawtooth");
       playNoiseBurst(0.1, 0.04);
-    }, 700);
-    setTimeout(() => playTone(58, 0.16, "sine"), 650);
-    setTimeout(() => playTone(62, 0.18, "sine"), 1500);
-    setTimeout(() => playTone(58, 0.2, "sine"), 2100);
+    });
+    later(650, () => playTone(58, 0.16, "sine"));
+    later(1500, () => playTone(62, 0.18, "sine"));
+    later(2100, () => playTone(58, 0.2, "sine"));
     for (let index = 0; index < 9; index += 1) {
-      setTimeout(() => playTone(150 + index * 10, 0.035, "square"), 2100 + index * 145);
+      if (experience.preferences.motion !== "reduced") later(2100 + index * 145, () => playTone(150 + index * 10, 0.035, "square"));
     }
-    setTimeout(() => {
+    later(4450, () => {
       if (event.reveal.shot) {
         playNoiseBurst(0.32, 0.13);
         playTone(70, 0.3, "sawtooth");
@@ -1604,7 +1651,7 @@ function playFxSound(event) {
       } else {
         playTone(110, 0.08, "square");
       }
-    }, 4450);
+    });
   } else if (event.type === "gameover") {
     playTone(220, 0.4, "sine");
     setTimeout(() => playTone(277, 0.45, "sine"), 120);
@@ -1687,6 +1734,10 @@ function renderRoom() {
   if (!state) {
     return;
   }
+  const dock = document.querySelector(".action-dock");
+  dock.classList.toggle("is-lobby", state.phase === "lobby");
+  dock.classList.toggle("is-your-turn", Boolean(state.me && state.me.alive &&
+    state.me.id === state.turnPlayerId && !state.turnGateReason));
   $("room-code-label").textContent = "主桌";
   let status = "等待入座";
   if (state.phase === "playing") {
@@ -1745,9 +1796,25 @@ function updateTurnClock() {
     clock.hidden = true;
     clock.className = "turn-clock";
     app.gateLocked = false;
+    if (state) {
+      $("turn-banner").className = "turn-banner";
+      $("turn-banner-title").textContent = state.phase === "gameover" ? "本局结束" : "等你入座";
+      $("turn-banner-copy").textContent = state.phase === "gameover" ? "回味这一局，准备下一局。" : "准备好，就开始第一手。";
+    }
     return;
   }
-  const now = Date.now();
+  const now = Date.now() + app.serverOffset;
+  const myTurn = Boolean(state.me && state.me.id === state.turnPlayerId && state.me.alive);
+  const banner = $("turn-banner");
+  banner.classList.toggle("your-turn", myTurn && !state.turnGateReason);
+  let bannerTitle = myTurn ? "轮到你了" : "等待 " + (state.turnPlayerName || "开局");
+  let bannerCopy = myTurn ? "选 1–3 张牌，或质疑上一位" : "观察对手，想好下一手。";
+  if (state.pendingSpeech) { bannerTitle = state.pendingSpeech.playerName + " 正在放话"; bannerCopy = "留意牌桌上的每一句话。"; }
+  else if (state.turnGateReason === "cinematic") { bannerTitle = "亮牌与轮盘"; bannerCopy = "看清判定，再接着出牌。"; }
+  else if (state.phase === "out_challenge" && myTurn) { bannerTitle = "这一手，必须质疑"; bannerCopy = "没有可继续出牌的回合了。"; }
+  $("turn-banner-title").textContent = bannerTitle;
+  $("turn-banner-copy").textContent = bannerCopy;
+  clock.hidden = false;
   if (state.pendingSpeech) {
     clock.textContent = "AI 放话中";
     clock.classList.add("waiting");
@@ -1764,6 +1831,8 @@ function updateTurnClock() {
   const turnPlayer = state.players.find((player) => player.id === state.turnPlayerId);
   const humanTurn = Boolean(turnPlayer && !turnPlayer.isAI && !turnPlayer.autopilot && state.turnDeadline);
   const deadlineRemaining = humanTurn ? Math.max(0, state.turnDeadline - now) : 0;
+  $("turn-progress-fill").style.transform = "scaleX(" + Math.min(1, deadlineRemaining / 30000) + ")";
+  banner.classList.toggle("urgent", myTurn && deadlineRemaining > 0 && deadlineRemaining <= 5000);
   clock.hidden = false;
   clock.classList.remove("waiting", "urgent");
   if (gateRemaining > 0) {
@@ -1795,11 +1864,11 @@ function renderRoundThoughts(state) {
   const thoughts = Array.isArray(state.roundThoughts) ? state.roundThoughts : [];
   if (state.phase !== "gameover" || thoughts.length === 0) {
     panel.hidden = true;
-    panel.innerHTML = "";
+    experience.render(panel, "");
     return;
   }
   panel.hidden = false;
-  panel.innerHTML = [
+  experience.render(panel, [
     "<div class=\"round-thoughts-head\"><span>赛后心声</span><small>牌局结束后公开</small></div>",
     thoughts.map((thought) => {
       const avatar = thought.portraitUrl || thought.avatarUrl
@@ -1808,7 +1877,7 @@ function renderRoundThoughts(state) {
       return "<div class=\"round-thought\">" + avatar +
         "<div class=\"round-thought-body\"><strong>" + escapeHtml(thought.name) + "</strong><p>" + escapeHtml(thought.text) + "</p></div></div>";
     }).join("")
-  ].join("");
+  ].join(""));
 }
 
 function seatPosition(seat) {
@@ -1818,7 +1887,7 @@ function seatPosition(seat) {
 
 function renderSeats(state) {
   const layer = $("seat-layer");
-  layer.innerHTML = state.players.map((player) => {
+  experience.keyed(layer, state.players.map((player) => {
     const isMe = Boolean(state.me && state.me.id === player.id);
     const classes = [
       "seat",
@@ -1862,7 +1931,7 @@ function renderSeats(state) {
     } else if (player.occupied && player.alive) {
       miniCards = Array.from({ length: Math.min(player.handCount, 8) }, () => "<i class=\"mini-card\"></i>").join("");
     }
-    return [
+    return { key: player.seat, markup: [
       "<div class=\"" + classes + "\" data-seat=\"" + player.seat + "\">",
       "  <div class=\"seat-visual\">",
       player.portraitUrl
@@ -1873,14 +1942,14 @@ function renderSeats(state) {
         : "<span>" + escapeHtml(player.emoji || "🕵️") + "</span>") + "</div>",
       "  </div>",
       "  <div class=\"seat-info\">",
-      "    <div class=\"seat-name\">" + escapeHtml(player.name) + badges.join("") + "</div>",
-      "    <div class=\"seat-sub\">" + escapeHtml(sub) + "</div>",
+      "    <div class=\"seat-name\"><span class=\"seat-player-name\">" + escapeHtml(player.name) + "</span>" + badges.join("") + "</div>",
+      "    <div class=\"seat-sub\">" + (player.occupied && state.phase !== "lobby" ? player.handCount + " 张 · " : "") + escapeHtml(sub) + "</div>",
       "    <div class=\"thinking-dots\"><i></i><i></i><i></i></div>",
       "  </div>",
       "  <div class=\"mini-hand\">" + miniCards + "</div>",
       "</div>"
-    ].join("");
-  }).join("");
+    ].join("") };
+  }));
 }
 
 function cardMarkup(rank, suit, red, small, wild, label) {
@@ -1897,6 +1966,7 @@ function renderCenter(state) {
   const tableCard = state.tableCard || (state.tableRank ? { rank: state.tableRank, suit: "♠", red: false } : null);
   const parts = [];
   if (tableCard) {
+    parts.push("<span class=\"center-caption\">本轮宣称点数</span>");
     parts.push(cardMarkup(tableCard.rank, tableCard.suit, tableCard.red, false));
   }
   if (state.lastReveal && state.lastReveal.cards) {
@@ -1905,138 +1975,166 @@ function renderCenter(state) {
     const backs = Array.from({ length: Math.min(state.lastPlay.count, 3) }, () => "<i class=\"center-back-card\"></i>").join("");
     parts.push("<div class=\"center-stack center-back-stack\">" + backs + "</div>");
   }
-  panel.innerHTML = parts.join("");
+  experience.render(panel, parts.join(""));
 }
 
 function renderHand(state) {
   const row = $("hand-row");
+  const hand = state.me && Array.isArray(state.me.hand) ? state.me.hand.slice() : [];
+  $("hand-count").textContent = hand.length ? hand.length + " 张" : "";
+  $("clear-selection").disabled = app.selected.size === 0;
+  $("sort-hand").disabled = hand.length < 2;
   if (!state.me) {
-    row.innerHTML = "<div class=\"spectator-note\">观战模式 · 你只能看到公开信息<br>摄像头联机仅对两位真人玩家开放</div>";
+    experience.forget(row);
+    experience.render(row, "<div class=\"spectator-note\">观战中 · 留意每一次出牌与质疑。</div>");
     $("hand-hint").textContent = "AI 对局公开观战";
     return;
   }
   if (!state.me.alive) {
-    row.innerHTML = "<div class=\"empty-hand-note\">你已经出局，正在旁观牌局。</div>";
+    experience.forget(row);
+    experience.render(row, "<div class=\"empty-hand-note\">你已出局，继续看看谁能留到最后。<br>结算后换个名字，再来一局。</div>");
     $("hand-hint").textContent = "旁观中";
     return;
   }
   if (!state.me.hand || state.me.hand.length === 0) {
-    row.innerHTML = "<div class=\"empty-hand-note\">手牌已空：对手出牌后轮到你时必须质疑；若对手刚质疑完则自动跳过。</div>";
+    experience.forget(row);
+    experience.render(row, "<div class=\"empty-hand-note\">手牌已空，留意下一次质疑机会。</div>");
     $("hand-hint").textContent = "空手牌 · 等待强制质疑";
     return;
   }
-  const canClick = state.legal.play && state.legal.maxCards > 0;
-  row.innerHTML = state.me.hand.map((card) => {
-    const selected = app.selected.has(card.id) ? " selected" : "";
+  const canClick = state.phase === "playing" && state.me.alive;
+  if (app.handSorted) {
+    const order = (card) => card.wild ? 0 : card.rank === state.tableRank ? 1 : 2 + ["J", "Q", "K"].indexOf(card.rank);
+    hand.sort((a, b) => order(a) - order(b));
+  }
+  experience.keyed(row, hand.map((card) => {
     const wild = Boolean(card.wild);
-    return [
-      "<button class=\"playing-card" + (card.red ? " red" : "") + (wild ? " joker" : "") + selected + "\" data-card-id=\"" + escapeHtml(card.id) + "\"" + (canClick ? "" : " disabled") + ">",
-      "  <span class=\"card-rank\">" + escapeHtml(wild ? "🃏" : card.rank) + "</span>",
-      "  <span class=\"card-center\">" + escapeHtml(wild ? (card.label || "王") : card.suit) + "</span>",
+    const matching = wild || card.rank === state.tableRank;
+    return { key: card.id, markup: [
+      "<button type=\"button\" class=\"playing-card" + (card.red ? " red" : "") + (wild ? " joker" : "") + (matching ? " matching" : "") + "\" data-card-id=\"" + escapeHtml(card.id) + "\" aria-label=\"" + escapeHtml(wild ? (card.label || "万能牌") : card.rank + card.suit) + "\"" + (canClick ? "" : " disabled") + ">",
+      "  <span class=\"card-rank\">" + escapeHtml(wild ? "JOKER" : card.rank) + "</span>",
+      "  <span class=\"card-center\">" + escapeHtml(wild ? "Wild" : card.suit) + "</span>",
       "  <span class=\"card-suit\">" + escapeHtml(wild ? "万能" : card.suit) + "</span>",
       "</button>"
-    ].join("");
-  }).join("");
+    ].join("") };
+  }));
+  row.querySelectorAll("[data-card-id]").forEach(button => {
+    const selected = app.selected.has(button.dataset.cardId);
+    button.classList.toggle("selected", selected);
+    button.setAttribute("aria-pressed", String(selected));
+  });
   $("hand-hint").textContent = state.legal.play
-    ? "选择 1 到 3 张牌"
-    : "等待其他玩家行动";
+    ? "选择 1 到 3 张牌 · Enter 出牌"
+    : "可先选牌，轮到你时出牌";
 }
 
 function renderActionBar(state) {
   const bar = $("action-bar");
+  if (!app.connected) {
+    experience.render(bar, "<span class=\"action-hint\">正在重新连接牌桌，手牌与席位已保留。</span>");
+    return;
+  }
+  if (app.actionPending) {
+    experience.render(bar, "<button class=\"action-button play\" type=\"button\" disabled aria-busy=\"true\">正在确认…</button>");
+    return;
+  }
   if (state.phase === "lobby") {
     if (state.canStart) {
-      bar.innerHTML = "<span class=\"action-hint\">空位会由 AI 自动补齐</span><button class=\"action-button play\" type=\"button\" data-action=\"start\">开始牌局</button>";
+      experience.render(bar, "<span class=\"action-hint\">准备好了就开局，AI 会补齐空位。</span><button class=\"action-button play\" type=\"button\" data-action=\"start\">开始牌局</button>");
     } else {
-      bar.innerHTML = "<span class=\"action-hint\">等待房主开始主桌牌局</span>";
+      experience.render(bar, "<span class=\"action-hint\">等待房主开始主桌牌局</span>");
     }
     return;
   }
   if (state.phase === "gameover") {
     if (state.canRestart) {
-      bar.innerHTML = "<button class=\"action-button play\" type=\"button\" data-action=\"restart\">开始下一局</button>";
+      experience.render(bar, "<button class=\"action-button play\" type=\"button\" data-action=\"restart\">开始下一局</button>");
     } else {
-      bar.innerHTML = "<span class=\"action-hint\">牌局结束 · 等待房主开始下一局</span>";
+      experience.render(bar, "<span class=\"action-hint\">牌局结束 · 等待房主开始下一局</span>");
     }
     return;
   }
   if (!state.me) {
-    bar.innerHTML = "<span class=\"action-hint\">观战中 · 当前轮到 <b>" + escapeHtml(state.turnPlayerName || "等待") + "</b></span>";
+    experience.render(bar, "<span class=\"action-hint\">观战中 · 当前轮到 <b>" + escapeHtml(state.turnPlayerName || "等待") + "</b></span>");
     return;
   }
   if (state.me.autopilot) {
-    bar.innerHTML = "<span class=\"action-hint\">你已掉线，AI 正在托管你的席位</span>";
+    experience.render(bar, "<span class=\"action-hint\">你已掉线，AI 正在托管你的席位</span>");
     return;
   }
   if (!state.me.alive) {
-    bar.innerHTML = "<span class=\"action-hint\">你已出局，正在旁观</span>";
+    experience.render(bar, "<span class=\"action-hint\">你已出局，正在旁观</span>");
     return;
   }
   if (state.pendingSpeech) {
-    bar.innerHTML = "<span class=\"action-hint\"><b>" + escapeHtml(state.pendingSpeech.playerName || "AI") + "</b> 正在放话，语音结束后继续...</span>";
+    experience.render(bar, "<span class=\"action-hint\"><b>" + escapeHtml(state.pendingSpeech.playerName || "AI") + "</b> 正在放话…</span>");
     return;
   }
   if (state.turnGateReason === "cinematic") {
-    bar.innerHTML = "<span class=\"action-hint\">亮牌与处决演出中，结束后继续...</span>";
+    experience.render(bar, "<span class=\"action-hint\">亮牌与轮盘演出中，马上继续。</span>");
     return;
   }
   const isMyTurn = state.me.id === state.turnPlayerId;
   if (!isMyTurn) {
-    bar.innerHTML = "<span class=\"action-hint\">等待 <b>" + escapeHtml(state.turnPlayerName || "下一位玩家") + "</b> 决策...</span>";
+    experience.render(bar, "<span class=\"action-hint\">等待 <b>" + escapeHtml(state.turnPlayerName || "下一位玩家") + "</b> 行动 · 可以先选好手牌</span>");
+    return;
+  }
+  if (app.fxAnimating) {
+    experience.render(bar, "<span class=\"action-hint\">牌桌演出中 · 马上继续</span>");
     return;
   }
   if (state.turnGateUntil && Date.now() < state.turnGateUntil) {
-    bar.innerHTML = "<span class=\"action-hint\">等待上一位玩家放话结束...</span>";
+    experience.render(bar, "<span class=\"action-hint\">等待上一位玩家放话结束…</span>");
     return;
   }
   if (state.phase === "out_challenge") {
     const finalChallenge = state.cardsInHands === 0;
     const emptyHand = state.me && state.me.hand && state.me.hand.length === 0;
-    bar.innerHTML = [
+    experience.render(bar, [
       "<span class=\"action-hint\">" + (finalChallenge
         ? "全部手牌已打完 · 最后一手必须质疑"
         : emptyHand ? "你的手牌已空 · 上一位打了牌，必须质疑" : "你是最后持牌者 · 必须质疑上一位，不能出牌") + "</span>",
       "<button class=\"action-button challenge\" type=\"button\" data-action=\"challenge\">质疑上一位</button>"
-    ].join("");
+    ].join(""));
     return;
   }
   const count = app.selected.size;
   const canPlay = count >= 1 && count <= state.legal.maxCards;
   const playText = count > 0
-    ? "打出 " + count + " 张 · 宣称 " + state.tableRank
+    ? "打出 " + count + " 张 · " + state.tableRank
     : "选择手牌";
   const challenge = state.legal.challenge
     ? "<button class=\"action-button challenge\" type=\"button\" data-action=\"challenge\">质疑上一位</button>"
     : "";
-  bar.innerHTML = [
+  experience.render(bar, [
     "<span class=\"action-hint\">" + (count > 0 ? "即将宣称 <b>" + count + " 张 " + escapeHtml(state.tableRank) + "</b>" : "选择 1 到 3 张牌") + "</span>",
-    "<button class=\"action-button play\" type=\"button\" data-action=\"play\"" + (canPlay ? "" : " disabled") + ">" + escapeHtml(playText) + "</button>",
+    "<button class=\"action-button play\" type=\"button\" data-action=\"play\"" + (canPlay ? "" : " disabled") + ">" + escapeHtml(playText) + "<kbd>Enter</kbd></button>",
     challenge
-  ].join("");
+  ].join(""));
 }
 
 function renderLineup(state) {
   const panel = $("lineup-panel");
   if (state.phase !== "lobby") {
     panel.hidden = true;
-    panel.innerHTML = "";
+    experience.render(panel, "");
     return;
   }
   panel.hidden = false;
   const lineup = Array.isArray(state.aiLineup) ? state.aiLineup : [];
   const roles = app.aiRoles.length > 0 ? app.aiRoles : lineup;
   if (roles.length === 0) {
-    panel.innerHTML = "<div class=\"lineup-head\"><strong>AI 阵容</strong><small>管理员尚未启用角色</small></div>";
+    experience.render(panel, "<div class=\"lineup-head\"><strong>AI 阵容</strong><small>管理员尚未启用角色</small></div>");
     return;
   }
   const isHost = Boolean(state.me && state.me.id === state.hostId);
   if (!isHost) {
-    panel.innerHTML = [
+    experience.render(panel, [
       "<div class=\"lineup-head\"><strong>本局 AI 阵容</strong><small>由房主选择</small></div>",
       "<div class=\"lineup-readonly\">" + lineup.map((role) => {
         return "<span class=\"lineup-chip\">" + escapeHtml(role.avatarEmoji || "🎲") + " " + escapeHtml(role.name) + "</span>";
       }).join("") + "</div>"
-    ].join("");
+    ].join(""));
     return;
   }
   const slots = [];
@@ -2053,10 +2151,10 @@ function renderLineup(state) {
       "</div>"
     ].join(""));
   }
-  panel.innerHTML = [
+  experience.render(panel, [
     "<div class=\"lineup-head\"><strong>AI 阵容</strong><small>按空位顺序启用，只能选择管理员已配置的角色</small></div>",
     "<div class=\"lineup-grid\">" + slots.join("") + "</div>"
-  ].join("");
+  ].join(""));
 }
 
 function renderFeed(state) {
@@ -2075,14 +2173,14 @@ function renderFeed(state) {
     });
   }
   items.sort((left, right) => left.at - right.at);
-  feed.innerHTML = items.slice(-60).map((item) => {
+  experience.render(feed, items.slice(-60).map((item) => {
     return [
       "<div class=\"feed-item type-" + escapeHtml(item.type) + "\">",
       "  <span class=\"feed-meta\">" + formatTime(item.at) + " · " + escapeHtml(item.meta) + "</span>",
       "  " + escapeHtml(item.text),
       "</div>"
     ].join("");
-  }).join("");
+  }).join(""));
   if (nearBottom) {
     feed.scrollTop = feed.scrollHeight;
   }
@@ -2096,6 +2194,11 @@ function renderFeed(state) {
 }
 
 async function sendAction(action) {
+  if (app.actionPending) return;
+  if (!app.connected) {
+    showToast("正在重新连接牌桌，请稍等。", true);
+    return;
+  }
   if (!app.playerId) {
     showToast("观战模式不能操作牌局。", true);
     return;
@@ -2108,18 +2211,32 @@ async function sendAction(action) {
     showToast(app.room.turnGateReason === "cinematic" ? "处决演出尚未结束。" : "等待上一位玩家放话结束。", true);
     return;
   }
+  app.actionPending = true;
+  const requestId = ++app.actionRequestId;
+  renderActionBar(app.room);
   try {
     await apiRequest("/api/rooms/" + encodeURIComponent(app.roomCode) + "/action", {
       method: "POST",
       body: { playerId: app.playerId, token: app.playerToken, action }
     });
     playTone(280, 0.05, "triangle");
+    app.selected.clear();
+    if (app.room) renderHand(app.room);
   } catch (error) {
     showToast(error.message, true);
+  } finally {
+    if (requestId === app.actionRequestId) {
+      app.actionPending = false;
+      if (app.room) renderActionBar(app.room);
+    }
   }
 }
 
 async function startRoom() {
+  if (app.actionPending) return;
+  app.actionPending = true;
+  const requestId = ++app.actionRequestId;
+  if (app.room) renderActionBar(app.room);
   try {
     await apiRequest("/api/table/start", {
       method: "POST",
@@ -2127,6 +2244,11 @@ async function startRoom() {
     });
   } catch (error) {
     showToast(error.message, true);
+  } finally {
+    if (requestId === app.actionRequestId) {
+      app.actionPending = false;
+      if (app.room) renderActionBar(app.room);
+    }
   }
 }
 
@@ -2142,6 +2264,10 @@ async function setAiLineup(roleIds) {
 }
 
 async function restartRoom() {
+  if (app.actionPending) return;
+  app.actionPending = true;
+  const requestId = ++app.actionRequestId;
+  if (app.room) renderActionBar(app.room);
   try {
     await apiRequest("/api/table/next", {
       method: "POST",
@@ -2149,6 +2275,11 @@ async function restartRoom() {
     });
   } catch (error) {
     showToast(error.message, true);
+  } finally {
+    if (requestId === app.actionRequestId) {
+      app.actionPending = false;
+      if (app.room) renderActionBar(app.room);
+    }
   }
 }
 
@@ -2196,7 +2327,8 @@ function wireRoomEvents() {
       }
       app.selected.add(id);
     }
-    renderRoom();
+    renderHand(app.room);
+    renderActionBar(app.room);
   });
 
   $("chat-form").addEventListener("submit", async (event) => {
@@ -2249,6 +2381,8 @@ function wireRoomEvents() {
 
   $("voice-toggle").addEventListener("click", () => {
     app.voiceEnabled = !app.voiceEnabled;
+    experience.save({ narration: app.voiceEnabled ? "key" : "off" });
+    $("narration-select").value = experience.preferences.narration;
     if (!app.voiceEnabled) {
       const pendingSpeechId = app.activeSpeechId;
       cancelVoice();
@@ -2439,7 +2573,8 @@ function updateVoiceToggle() {
     return;
   }
   button.classList.toggle("active", app.voiceEnabled);
-  button.innerHTML = app.voiceEnabled ? "<span>🔊</span> 语音开" : "<span>🔇</span> 语音关";
+  button.innerHTML = experience.icon(app.voiceEnabled ? "volume-2" : "volume-x") + (app.voiceEnabled ? " 语音开" : " 语音关");
+  button.setAttribute("aria-pressed", String(app.voiceEnabled));
 }
 
 function resetVoiceRuntime() {
@@ -2683,6 +2818,7 @@ function handlePendingSpeech(state) {
     app.activeSpeechId = null;
     clearTimeout(app.speechWatchdog);
     app.speechWatchdog = null;
+    processFxQueue();
     return;
   }
   if (app.ackedSpeechIds.has(pending.id) || app.activeSpeechId === pending.id) {
@@ -2722,9 +2858,6 @@ async function acknowledgeSpeech(speechId) {
   app.speechWatchdog = null;
   if (app.activeSpeechId === speechId) {
     app.activeSpeechId = null;
-  }
-  if (app.room && app.room.pendingSpeech && app.room.pendingSpeech.id === speechId) {
-    app.room.pendingSpeech = null;
   }
   setTimeout(processFxQueue, 0);
   setTimeout(maybeShowVictorySettlement, 0);
@@ -2813,6 +2946,7 @@ function drainVoiceQueue() {
       return;
     }
     fallbackStarted = true;
+    app.voiceMetrics.fallbacks += 1;
     releaseCurrentVoiceAudio();
     playBrowserVoice(item, finish);
   };
@@ -2861,28 +2995,22 @@ function scheduleSpeech(delay, text, emotion, roleName, priority) {
 }
 
 function narrationForEvent(event) {
+  if (!app.voiceEnabled || experience.preferences.narration !== "key") {
+    return null;
+  }
   if (event.type === "play") {
-    if (event.suppressSpeech) {
-      return null;
-    }
-    return {
-      text: event.speech || (event.playerName + " 打出 " + event.count + " 张，宣称 " + event.claimRank + "。"),
-      emotion: "tease",
-      roleName: ""
-    };
+    return null;
   } else if (event.type === "round") {
     return { text: "第 " + event.round + " 轮，桌面点数 " + event.rank + "。", emotion: "calm", roleName: "" };
   } else if (event.type === "reveal") {
     const reveal = event.reveal;
     return {
-      text: reveal.challengerName + " 质疑 " + reveal.claimantName + "。" +
-        (reveal.truthful ? "亮牌属实，质疑失败。" : "抓到谎言，质疑成功。"),
+      text: reveal.truthful ? "亮牌属实，质疑失败。" : "抓到谎言，质疑成功。",
       emotion: reveal.truthful ? "surprised" : "excited",
       roleName: ""
     };
   } else if (event.type === "execution") {
-    const reveal = event.reveal;
-    return { text: reveal.loserName + " 扣下扳机。", emotion: "dramatic", roleName: "" };
+    return null;
   } else if (event.type === "gameover") {
     return { text: "牌局结束，" + event.winnerName + " 获胜。", emotion: "excited", roleName: "" };
   }
@@ -2890,9 +3018,6 @@ function narrationForEvent(event) {
 }
 
 function narrateFx(event) {
-  if (!app.voiceEnabled) {
-    return;
-  }
   const narration = narrationForEvent(event);
   if (narration) {
     speak(narration.text, narration.emotion, narration.roleName);
@@ -2927,10 +3052,11 @@ function updateCameraUi() {
   localTile.classList.toggle("has-video", Boolean(app.localStream));
   remoteTile.classList.toggle("has-video", Boolean(app.remoteStream));
   toggle.classList.toggle("active", app.cameraOn);
-  toggle.innerHTML = app.cameraOn ? "<span>◉</span> 关闭摄像头" : "<span>◉</span> 开启摄像头";
+  toggle.innerHTML = experience.icon(app.cameraOn ? "camera-off" : "camera") + (app.cameraOn ? " 关闭摄像头" : " 开启摄像头");
+  toggle.setAttribute("aria-pressed", String(app.cameraOn));
   const remote = app.room ? getRemoteHuman(app.room) : null;
   $("remote-label").textContent = remote ? remote.name : "对家";
-  dock.hidden = !(app.cameraOn || app.remoteStream || (app.pc && app.remoteId));
+  dock.hidden = !(app.cameraOn || app.remoteStream || (app.pc && app.remoteCameraOn));
 }
 
 async function startCamera() {
@@ -2971,6 +3097,7 @@ async function startCamera() {
       } else {
         ensurePeer(remote);
       }
+      sendSignal({ kind: "camera", enabled: true });
     }
     showToast("摄像头已开启。视频仅在真人浏览器之间点对点传输。");
   } catch (error) {
@@ -2985,6 +3112,7 @@ async function startCamera() {
 }
 
 function stopCamera() {
+  if (app.cameraOn && app.remoteId) sendSignal({ kind: "camera", enabled: false });
   app.cameraRequestId += 1;
   app.cameraStarting = false;
   if (app.localStream) {
@@ -3033,6 +3161,7 @@ function closePeer() {
   app.remoteId = null;
   app.remoteSeat = null;
   app.remoteStream = null;
+  app.remoteCameraOn = false;
   const video = $("remote-video");
   if (video) {
     video.srcObject = null;
@@ -3069,6 +3198,7 @@ function ensurePeer(remote) {
     if (app.pc !== pc) {
       return;
     }
+    app.remoteCameraOn = true;
     if (event.streams && event.streams[0]) {
       app.remoteStream = event.streams[0];
     } else {
@@ -3082,6 +3212,7 @@ function ensurePeer(remote) {
         return;
       }
       app.remoteStream = null;
+      app.remoteCameraOn = false;
       $("remote-video").srcObject = null;
       updateCameraUi();
     });
@@ -3284,6 +3415,16 @@ async function handlePeerSignal(payload) {
   if (!payload || !payload.signal || !payload.from) {
     return;
   }
+  if (payload.signal.kind === "camera") {
+    app.remoteCameraOn = Boolean(payload.signal.enabled);
+    if (!app.remoteCameraOn) {
+      app.remoteStream = null;
+      $("remote-video").srcObject = null;
+      if (!app.cameraOn) closePeer();
+    }
+    updateCameraUi();
+    return;
+  }
   let remote = app.room ? app.room.players.find((player) => player.id === payload.from) : null;
   if (!remote) {
     remote = { id: payload.from, seat: 99, name: payload.fromName || "对家", isAI: false, occupied: true };
@@ -3345,7 +3486,7 @@ async function restoreSession() {
     return;
   }
   setAccount(account);
-  if (account.needsUsername || account.pendingRename) {
+  if (account.needsUsername) {
     app.pendingEnterAfterName = true;
     openUsernameDialog(Boolean(account.pendingRename));
     return;
@@ -3353,7 +3494,72 @@ async function restoreSession() {
   await enterTable();
 }
 
+function wireExperience() {
+  $("motion-select").value = experience.preferences.motion;
+  $("narration-select").value = experience.preferences.narration;
+  $("experience-button").addEventListener("click", () => openDialog("experience-dialog"));
+  $("camera-size-toggle").addEventListener("click", () => {
+    const expanded = $("camera-dock").classList.toggle("expanded");
+    $("camera-size-toggle").setAttribute("aria-expanded", String(expanded));
+    $("camera-size-toggle").setAttribute("aria-label", expanded ? "缩小视频" : "放大视频");
+    $("camera-size-toggle").innerHTML = experience.icon(expanded ? "minimize" : "expand");
+  });
+  $("motion-select").addEventListener("change", event => {
+    experience.save({ motion: event.target.value });
+  });
+  $("narration-select").addEventListener("change", event => {
+    experience.save({ narration: event.target.value });
+    app.voiceEnabled = event.target.value !== "off";
+    if (!app.voiceEnabled) {
+      const pendingId = app.activeSpeechId;
+      cancelVoice();
+      if (pendingId) acknowledgeSpeech(pendingId);
+    }
+    updateVoiceToggle();
+  });
+  $("sort-hand").addEventListener("click", () => {
+    app.handSorted = !app.handSorted;
+    $("sort-hand").textContent = app.handSorted ? "恢复顺序" : "理牌";
+    if (app.room) renderHand(app.room);
+  });
+  $("clear-selection").addEventListener("click", () => {
+    app.selected.clear();
+    if (app.room) { renderHand(app.room); renderActionBar(app.room); }
+  });
+  $("reconnect-button").addEventListener("click", () => {
+    if (app.roomCode) connectEvents();
+  });
+  window.addEventListener("online", () => {
+    if (app.roomCode && !app.connected) connectEvents();
+  });
+  window.addEventListener("offline", () => {
+    if (!app.roomCode) return;
+    app.connected = false;
+    closeEvents();
+    $("connection-banner").hidden = false;
+    setConnectionStatus("网络已断开", true);
+    if (app.room) renderActionBar(app.room);
+  });
+  document.addEventListener("keydown", event => {
+    if (event.repeat || event.ctrlKey || event.metaKey || event.altKey ||
+      !app.room || document.querySelector("dialog[open]") ||
+      event.target.closest("input, textarea, select, [contenteditable=true]")) return;
+    if (/^[1-5]$/.test(event.key)) {
+      const card = $("hand-row").querySelectorAll("[data-card-id]")[Number(event.key) - 1];
+      if (card && !card.disabled) { event.preventDefault(); card.click(); }
+    } else if (event.key === "Enter") {
+      const play = $("action-bar").querySelector("[data-action=play]");
+      if (play && !play.disabled && !app.actionPending) { event.preventDefault(); play.click(); }
+    } else if (event.key === "Escape" && app.selected.size) {
+      event.preventDefault();
+      $("clear-selection").click();
+    }
+  });
+}
+
 async function initialize() {
+  document.body.dataset.page = "home";
+  wireExperience();
   loadMusicPreference();
   wireDialogs();
   wireHomeEvents();
@@ -3369,6 +3575,9 @@ async function initialize() {
       const speechId = app.activeSpeechId;
       resetVoiceRuntime();
       acknowledgeSpeech(speechId);
+    }
+    if (document.hidden && app.room && app.room.cinematicId) {
+      acknowledgeCinematic(app.room.cinematicId);
     }
   });
   window.addEventListener("pagehide", () => {
