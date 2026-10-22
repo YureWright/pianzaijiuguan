@@ -199,3 +199,18 @@ test("local AI handles the empty-hand challenge window", () => {
   assert.equal(Boolean(decision.speech), true);
   assert.notEqual(decision.speech, decision.monologue);
 });
+
+test("a cancelled turn aborts an in-flight provider request", async t => {
+  const controller = new AbortController();
+  let requestSignal;
+  t.mock.method(global, "fetch", async (_url, options) => {
+    requestSignal = options.signal;
+    return new Promise((_resolve, reject) => {
+      options.signal.addEventListener("abort", () => reject(new DOMException("cancelled", "AbortError")), { once: true });
+    });
+  });
+  const decision = ai.decideWithModel({ provider: "openai", baseUrl: "http://localhost", model: "test" }, context(), { signal: controller.signal });
+  controller.abort();
+  await assert.rejects(decision, { name: "AbortError" });
+  assert.equal(requestSignal.aborted, true);
+});

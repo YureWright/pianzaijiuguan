@@ -329,6 +329,11 @@ async function decideWithModel(profile, context, options) {
   const opts = options || {};
   const prompt = buildPrompt(context);
   const controller = new AbortController();
+  const abort = () => controller.abort();
+  if (opts.signal) {
+    opts.signal.addEventListener("abort", abort, { once: true });
+    if (opts.signal.aborted) abort();
+  }
   const timeout = setTimeout(() => controller.abort(), opts.timeoutMs || 15000);
   try {
     let text;
@@ -347,6 +352,7 @@ async function decideWithModel(profile, context, options) {
     return decision;
   } finally {
     clearTimeout(timeout);
+    if (opts.signal) opts.signal.removeEventListener("abort", abort);
   }
 }
 

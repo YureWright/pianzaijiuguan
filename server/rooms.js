@@ -427,10 +427,7 @@ class RoomStore {
     if (room.phase !== "playing" && room.phase !== "out_challenge") {
       return { error: "当前没有进行中的牌局。" };
     }
-    if (room.aiTimer) {
-      clearTimeout(room.aiTimer);
-      room.aiTimer = null;
-    }
+    this.cancelAI(room);
     if (room.turnTimer) {
       clearTimeout(room.turnTimer);
       room.turnTimer = null;
@@ -502,14 +499,8 @@ class RoomStore {
       viewer.aiRoleId = null;
       viewer.modelLabel = null;
       this.clearDisconnectTimer(viewer.id);
-      if (room.aiTimer && room.turnPlayerId === viewer.id) {
-        clearTimeout(room.aiTimer);
-        room.aiTimer = null;
-        room.aiThinkingId = null;
-        room.aiThought = null;
-      }
-      if (room.aiThought && room.aiThought.playerId === viewer.id && room.turnPlayerId === viewer.id) {
-        room.aiThought = null;
+      if (room.turnPlayerId === viewer.id) {
+        this.cancelAI(room);
       }
     }
     this.clients.get(code).set(connectionId, {
@@ -754,10 +745,7 @@ class RoomStore {
     }
     const deferred = room.deferredAction;
     this.clearSpeechGate(room);
-    if (room.aiTimer) {
-      clearTimeout(room.aiTimer);
-      room.aiTimer = null;
-    }
+    this.cancelAI(room);
     room.aiThinkingId = null;
     room.aiThought = null;
     if (deferred) {
@@ -801,6 +789,19 @@ class RoomStore {
     return { ok: true };
   }
 
+  cancelAI(room) {
+    if (room.aiTimer) clearTimeout(room.aiTimer);
+    room.aiTimer = null;
+    if (room.aiTask) room.aiTask.controller.abort();
+    room.aiTask = null;
+    this.clearAiThought(room);
+  }
+
+  isCurrentAiTask(room, task) {
+    return room.aiTask === task && room.round === task.round && room.phase === task.phase &&
+      this.isAiStillActing(room, task.playerId);
+  }
+
   isAiStillActing(room, playerId) {
     if (room.phase !== "playing" && room.phase !== "out_challenge") {
       return false;
@@ -823,9 +824,9 @@ class RoomStore {
     return "做出决定";
   }
 
-  async streamAiThought(room, player, text, decision) {
+  async streamAiThought(room, player, text, decision, task) {
     const clean = String(text || "").replace(/\s+/g, " ").trim().slice(0, 160) || "……";
-    room.aiThought = {
+    const thought = room.aiThought = {
       playerId: player.id,
       name: player.name,
       avatarEmoji: player.emoji,
@@ -841,28 +842,29 @@ class RoomStore {
     await this.sleep(500);
     const characters = Array.from(clean);
     for (let index = 0; index < characters.length; index += 2) {
-      if (!this.isAiStillActing(room, player.id)) {
+      if (!(this.isCurrentAiTask(room, task) && room.aiThought === thought)) {
         return false;
       }
-      room.aiThought.text += characters.slice(index, index + 2).join("");
+      thought.text += characters.slice(index, index + 2).join("");
       this.broadcastEvent(room, "ai-thought", room.aiThought);
       await this.sleep(48 + Math.floor(Math.random() * 28));
     }
     await this.sleep(280);
-    if (!this.isAiStillActing(room, player.id)) {
+    if (!(this.isCurrentAiTask(room, task) && room.aiThought === thought)) {
       return false;
     }
-    room.aiThought.status = "decided";
-    room.aiThought.done = true;
-    room.aiThought.decisionLabel = this.decisionLabel(room, decision);
+    thought.status = "decided";
+    thought.done = true;
+    thought.decisionLabel = this.decisionLabel(room, decision);
     this.broadcastEvent(room, "ai-thought", room.aiThought);
     this.broadcast(room);
     await this.sleep(1500);
-    return this.isAiStillActing(room, player.id);
+    return (this.isCurrentAiTask(room, task) && room.aiThought === thought);
   }
 
   afterChange(room) {
     room.updatedAt = Date.now();
+    if (room.aiTask && !this.isCurrentAiTask(room, room.aiTask)) this.cancelAI(room);
     if (room.phase !== "playing" && room.phase !== "out_challenge" && room.pendingSpeech) {
       this.clearSpeechGate(room);
     }
@@ -951,7 +953,7 @@ class RoomStore {
   }
 
   scheduleAI(room) {
-    if (room.aiTimer || room.pendingSpeech || room.turnGateReason === "cinematic") {
+    if (room.aiTask || room.aiTimer || room.pendingSpeech || room.turnGateReason === "cinematic") {
       return;
     }
     if (room.phase !== "playing" && room.phase !== "out_challenge") {
@@ -964,25 +966,17 @@ class RoomStore {
     room.aiThinkingId = player.id;
     this.setAiThought(room, player, "observing");
     this.broadcast(room);
-    const expectedRound = room.round;
-    const expectedPhase = room.phase;
-    const expectedPlayerId = player.id;
+    const task = { round: room.round, phase: room.phase, playerId: player.id, controller: new AbortController() };
+    room.aiTask = task;
     const delay = AI_THINK_MIN_MS + Math.floor(Math.random() * (AI_THINK_MAX_MS - AI_THINK_MIN_MS));
-    room.aiTimer = setTimeout(async () => {
-      room.aiTimer = null;
-      if (room.round !== expectedRound || room.phase !== expectedPhase || room.turnPlayerId !== expectedPlayerId) {
-        if (room.aiThinkingId === expectedPlayerId) {
-          this.clearAiThought(room);
-          this.broadcast(room);
-        }
-        return;
-      }
-      const current = game.findPlayer(room, expectedPlayerId);
-      if (!current || !current.alive) {
-        this.clearAiThought(room);
-        this.broadcast(room);
-        return;
-      }
+    room.aiTimer = setTimeout(() => this.runAI(room, task), delay);
+  }
+
+  async runAI(room, task) {
+    if (!this.isCurrentAiTask(room, task)) return;
+    room.aiTimer = null;
+    const current = game.findPlayer(room, task.playerId);
+    try {
       let decision = null;
       const role = current.aiRoleId && this.adminStore ? this.adminStore.getRole(current.aiRoleId) : null;
       const configuredForRemote = role && (role.apiKey || /^(https?:\/\/)?(127\.0\.0\.1|localhost)/i.test(role.baseUrl));
@@ -990,8 +984,9 @@ class RoomStore {
       context.systemPrompt = role ? (role.systemPrompt || "") : "";
       if (role && configuredForRemote) {
         try {
-          decision = await ai.decideWithModel(role, context, { timeoutMs: 18000 });
+          decision = await ai.decideWithModel(role, context, { timeoutMs: 18000, signal: task.controller.signal });
         } catch (error) {
+          if (!this.isCurrentAiTask(room, task)) return;
           const key = current.id + ":" + role.id;
           if (!this.modelErrors.has(key)) {
             this.modelErrors.set(key, true);
@@ -1006,22 +1001,9 @@ class RoomStore {
       if (!decision.monologue) {
         decision.monologue = ai.buildLocalMonologue(context, decision);
       }
-      if (room.round !== expectedRound || room.phase !== expectedPhase || room.turnPlayerId !== expectedPlayerId) {
-        this.clearAiThought(room);
-        this.broadcast(room);
-        return;
-      }
-      if (!current.isAI && !current.autopilot) {
-        this.clearAiThought(room);
-        this.broadcast(room);
-        return;
-      }
-      const thoughtFinished = await this.streamAiThought(room, current, decision.speech, decision);
-      if (!thoughtFinished) {
-        this.clearAiThought(room);
-        this.broadcast(room);
-        return;
-      }
+      if (!this.isCurrentAiTask(room, task)) return;
+      const thoughtFinished = await this.streamAiThought(room, current, decision.speech, decision, task);
+      if (!thoughtFinished || !this.isCurrentAiTask(room, task)) return;
       if (decision.speech) {
         game.addChat(room, current.id, current.name, decision.speech, "speech");
       }
@@ -1068,7 +1050,25 @@ class RoomStore {
         game.addLog(room, "error", "AI 行动失败：" + result.error);
         this.broadcast(room);
       }
-    }, delay);
+    } catch (error) {
+      if (this.isCurrentAiTask(room, task)) {
+        console.warn("[ai] turn failed:", error.message);
+        const fallback = ai.localDecision(game.aiContext(room, current), Math.random);
+        const result = game.performAction(room, current.id, {
+          type: fallback.action, cardIds: fallback.cardIds || [], speech: ""
+        }, Math.random);
+        if (result.reveal) this.setCinematicGate(room);
+        this.clearAiThought(room);
+        this.afterChange(room);
+      }
+    } finally {
+      // A cancelled request may finish after the next task has already started.
+      if (room.aiTask === task) {
+        room.aiTask = null;
+        this.clearAiThought(room);
+        this.scheduleAI(room);
+      }
+    }
   }
 
   scheduleDemoRestart(room) {
@@ -1151,9 +1151,7 @@ class RoomStore {
       if (now - room.updatedAt < ROOM_TTL_MS) {
         continue;
       }
-      if (room.aiTimer) {
-        clearTimeout(room.aiTimer);
-      }
+      this.cancelAI(room);
       if (room.speechTimer) {
         clearTimeout(room.speechTimer);
       }
@@ -1163,6 +1161,7 @@ class RoomStore {
       if (room.demoRestartTimer) {
         clearTimeout(room.demoRestartTimer);
       }
+      if (room.turnTimer) clearTimeout(room.turnTimer);
       this.rooms.delete(code);
       this.clients.delete(code);
     }
@@ -1188,9 +1187,7 @@ class RoomStore {
         clearTimeout(room.turnTimer);
         room.turnTimer = null;
       }
-      if (room.aiTimer) {
-        clearTimeout(room.aiTimer);
-      }
+      this.cancelAI(room);
       if (room.speechTimer) {
         clearTimeout(room.speechTimer);
       }
