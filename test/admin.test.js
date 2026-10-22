@@ -263,6 +263,57 @@ test("legacy qwen endpoints and duplicate voices migrate automatically", () => {
   }
 });
 
+test("current voice settings and credentials survive repeated restarts without rewrites", t => {
+  const directory = tempDir();
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const store = new AdminStore({ dataDir: directory });
+  store.updateTts({ narratorVoice: "Ethan", defaultVoice: "Cherry", apiKey: "saved-qwen-key" });
+  store.updateDoubao({ authMode: "apikey", apiKey: "saved-doubao-key", resourceId: "seed-tts-2.0",
+    voiceType: "zh_female_custom_narrator" });
+  const role = store.listRoles().find(item => item.name === "豆包");
+  store.updateRole(role.id, { ttsProvider: "qwen", voice: "Nofish" });
+  const configPath = path.join(directory, "config.json");
+  const saved = fs.readFileSync(configPath, "utf8");
+  for (let restart = 0; restart < 3; restart++) {
+    const reloaded = new AdminStore({ dataDir: directory });
+    assert.equal(reloaded.getTts().narratorVoice, "Ethan");
+    assert.equal(reloaded.getRole(role.id).ttsProvider, "qwen");
+    assert.equal(reloaded.getRole(role.id).voice, "Nofish");
+    assert.equal(fs.readFileSync(configPath, "utf8"), saved);
+  }
+});
+
+test("a v4 voice upgrade skips older migrations and runs only once", t => {
+  const directory = tempDir();
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const store = new AdminStore({ dataDir: directory });
+  store.config.voiceConfigVersion = 4;
+  store.config.tts.narratorVoice = "Ethan";
+  store.config.roles[0].ttsProvider = "qwen";
+  store.config.roles[0].voice = "Cherry";
+  store.saveConfig();
+  const migrated = new AdminStore({ dataDir: directory });
+  assert.equal(migrated.config.voiceConfigVersion, 5);
+  assert.equal(migrated.getTts().narratorVoice, "Ethan");
+  assert.equal(migrated.listRoles()[0].ttsProvider, "doubao");
+  const saved = fs.readFileSync(path.join(directory, "config.json"), "utf8");
+  new AdminStore({ dataDir: directory });
+  assert.equal(fs.readFileSync(path.join(directory, "config.json"), "utf8"), saved);
+});
+
+test("newer voice configuration versions are not downgraded", t => {
+  const directory = tempDir();
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const store = new AdminStore({ dataDir: directory });
+  store.config.voiceConfigVersion = 6;
+  store.config.tts.narratorVoice = "Ethan";
+  store.saveConfig();
+  const saved = fs.readFileSync(path.join(directory, "config.json"), "utf8");
+  const reloaded = new AdminStore({ dataDir: directory });
+  assert.equal(reloaded.config.voiceConfigVersion, 6);
+  assert.equal(fs.readFileSync(path.join(directory, "config.json"), "utf8"), saved);
+});
+
 test("room player tokens are required and never exposed", () => {
   const directory = tempDir();
   const previous = process.env.ADMIN_PASSWORD;

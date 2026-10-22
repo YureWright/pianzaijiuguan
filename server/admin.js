@@ -256,7 +256,8 @@ class AdminStore {
         }
         this.saveConfig(parsed);
       }
-      if (parsed.voiceConfigVersion !== 2) {
+      const voiceConfigVersion = Number(parsed.voiceConfigVersion) || 0;
+      if (voiceConfigVersion < 2) {
         const usedVoices = new Set();
         const fallbackVoices = ["Ethan", "Cherry", "Serena", "Chelsie", "Dylan", "Jada", "Sunny"];
         for (const role of parsed.roles) {
@@ -274,7 +275,7 @@ class AdminStore {
         parsed.voiceConfigVersion = 2;
         this.saveConfig(parsed);
       }
-      if (parsed.voiceConfigVersion !== 3) {
+      if (voiceConfigVersion < 3) {
         for (const role of parsed.roles) {
           if (!["qwen", "doubao"].includes(role.ttsProvider)) {
             role.ttsProvider = role.name === "豆包" ? "doubao" : "qwen";
@@ -289,7 +290,7 @@ class AdminStore {
         parsed.voiceConfigVersion = 3;
         this.saveConfig(parsed);
       }
-      if (parsed.voiceConfigVersion !== 4) {
+      if (voiceConfigVersion < 4) {
         const useApiKeyDoubao = parsed.doubao && parsed.doubao.authMode === "apikey";
         for (const role of parsed.roles) {
           if (role.name !== "豆包" || role.ttsProvider !== "doubao") {
@@ -305,7 +306,7 @@ class AdminStore {
         parsed.voiceConfigVersion = 4;
         this.saveConfig(parsed);
       }
-      if (parsed.voiceConfigVersion !== 5) {
+      if (voiceConfigVersion < 5) {
         const fallbackVoices = [
           "zh_male_m191_uranus_bigtts",
           "zh_male_taocheng_uranus_bigtts",
