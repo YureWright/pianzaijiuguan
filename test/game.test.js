@@ -101,7 +101,7 @@ test("AI memory records revealed claims and opponent tendencies", () => {
   assert.equal(belief.lies, 1);
 });
 
-test("private AI thoughts are captured for the post-round panel", () => {
+test("private AI thoughts are only published after gameover", () => {
   const room = makeRoom();
   const ai = room.players.find((player) => player.isAI);
   const memory = game.ensureAIMemory(room, ai);
@@ -110,8 +110,18 @@ test("private AI thoughts are captured for the post-round panel", () => {
   const thoughts = game.captureRoundThoughts(room);
   assert.equal(thoughts.length > 0, true);
   assert.equal(thoughts[0].text.includes("故意扣了一张假牌"), true);
-  const state = game.publicState(room, "human-1");
-  assert.equal(state.roundThoughts.length > 0, true);
+  for (const phase of ["playing", "out_challenge", "lobby"]) {
+    room.phase = phase;
+    for (const viewer of ["human-1", "human-2", "spectator"]) {
+      assert.deepEqual(game.publicState(room, viewer).roundThoughts, []);
+    }
+  }
+  room.phase = "gameover";
+  for (const viewer of ["human-1", "human-2", "spectator"]) {
+    assert.deepEqual(game.publicState(room, viewer).roundThoughts, thoughts);
+  }
+  game.prepareRematch(room);
+  assert.deepEqual(game.publicState(room, "spectator").roundThoughts, []);
 });
 
 test("a truthful play punishes the challenger", () => {

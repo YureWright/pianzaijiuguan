@@ -956,7 +956,7 @@ function publicState(room, viewerId) {
     turnSeat: turnPlayer ? turnPlayer.seat : null,
     turnPlayerName: turnPlayer ? turnPlayer.name : null,
     aiThought: room.aiThought || null,
-    roundThoughts: room.roundThoughts || [],
+    roundThoughts: room.phase === "gameover" ? (room.roundThoughts || []) : [],
     tableCard: room.tableCard,
     tableRank: room.tableRank,
     pileCount: room.pile.length,

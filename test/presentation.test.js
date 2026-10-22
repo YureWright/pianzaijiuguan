@@ -33,13 +33,24 @@ test("an unauthenticated SSE viewer never receives a player perspective", t => {
   const store = makeStore();
   t.after(() => store.closeAll());
   const created = store.createRoom({ name: "private player" });
-  game.startGame(created.room);
+  game.startGame(created.room, { starterSeat: 0 });
+  const ai = created.room.players.find(player => player.isAI);
+  const memory = game.ensureAIMemory(created.room, ai);
+  memory.lastMonologue = "PRIVATE_THOUGHT_SENTINEL";
+  memory.lastMonologueRound = created.room.round;
+  game.captureRoundThoughts(created.room);
   const frames = [];
   const response = { write: value => frames.push(value), on: () => {} };
   store.subscribe(created.room.code, created.playerId, "", "", response);
   const states = frames.filter(value => value.startsWith("data: ")).map(value => JSON.parse(value.slice(6)));
   assert.ok(states.length > 0);
   assert.ok(states.every(state => state.me === null && state.isSpectator));
+  assert.ok(states.every(state => !JSON.stringify(state).includes("PRIVATE_THOUGHT_SENTINEL")));
+
+  created.room.phase = "gameover";
+  store.broadcast(created.room);
+  const finalFrame = frames.filter(value => value.startsWith("data: ")).at(-1);
+  assert.ok(finalFrame.includes("PRIVATE_THOUGHT_SENTINEL"));
 });
 
 test("host can void an active game without recording a result", t => {
