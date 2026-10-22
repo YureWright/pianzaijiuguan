@@ -266,50 +266,42 @@ async function handleApi(request, response, url) {
     const startedAt = Date.now();
     try {
       const role = body.roleId ? adminStore.getRole(String(body.roleId), true) : null;
-      const useDoubao = Boolean(role && role.ttsProvider === "doubao");
       let audio;
       let providerUsed = "qwen";
-      if (useDoubao) {
-        const doubaoSettings = adminStore.getDoubao();
-        const doubaoReady = doubaoSettings.authMode === "apikey"
-          ? Boolean(doubaoSettings.apiKey && doubaoSettings.resourceId)
-          : Boolean(doubaoSettings.appId && doubaoSettings.accessToken);
-        if (doubaoSettings.enabled && doubaoReady) {
-          try {
-            audio = await doubaoTtsService.synthesize(doubaoSettings, {
-              text: body.text,
-              voice: role.voice || doubaoSettings.voiceType,
-              timeoutMs: 30000
-            });
-            providerUsed = "doubao";
-          } catch (doubaoError) {
-            console.warn("[tts] doubao failed, falling back to qwen:", doubaoError.message);
+      const doubaoSettings = adminStore.getDoubao();
+      const doubaoReady = doubaoSettings.authMode === "apikey"
+        ? Boolean(doubaoSettings.apiKey && doubaoSettings.resourceId)
+        : Boolean(doubaoSettings.appId && doubaoSettings.accessToken);
+      if (doubaoSettings.enabled && doubaoReady) {
+        try {
+          let voice = role && role.ttsProvider === "doubao" ? role.voice : body.voice;
+          if (!/^(zh_|ICL_)/.test(String(voice || ""))) {
+            voice = doubaoSettings.voiceType;
           }
-        }
-        if (!audio) {
-          const qwenSettings = adminStore.getTts();
-          if (!qwenSettings.enabled) {
-            sendJson(response, 503, { error: "豆包语音调用失败，千问备用语音也未启用。" });
-            return true;
-          }
-          audio = await ttsService.synthesize(qwenSettings, {
+          audio = await doubaoTtsService.synthesize(doubaoSettings, {
             text: body.text,
-            voice: qwenSettings.defaultVoice,
+            voice,
             timeoutMs: 30000
           });
-          providerUsed = "qwen-fallback";
+          providerUsed = "doubao";
+        } catch (doubaoError) {
+          console.warn("[tts] doubao failed, falling back to qwen:", doubaoError.message);
         }
-      } else {
-        const settings = adminStore.getTts();
-        if (!settings.enabled) {
-          sendJson(response, 503, { error: "大模型语音尚未启用。" });
+      }
+      if (!audio) {
+        const qwenSettings = adminStore.getTts();
+        if (!qwenSettings.enabled) {
+          sendJson(response, 503, { error: "豆包语音调用失败，千问备用语音也未启用。" });
           return true;
         }
-        audio = await ttsService.synthesize(settings, {
+        audio = await ttsService.synthesize(qwenSettings, {
           text: body.text,
-          voice: (role && role.voice) || body.voice || settings.narratorVoice,
+          voice: role && role.ttsProvider === "qwen"
+            ? role.voice
+            : (qwenSettings.defaultVoice || qwenSettings.narratorVoice),
           timeoutMs: 30000
         });
+        providerUsed = "qwen-fallback";
       }
       console.log("[tts] " + providerUsed + " " + (Date.now() - startedAt) + "ms, " +
         Array.from(String(body.text || "")).length + " chars");
@@ -723,6 +715,14 @@ async function handleApi(request, response, url) {
   if (request.method === "POST" && restartCode) {
     const body = await readJson(request);
     const result = store.restartRoom(restartCode, body.playerId, body.token);
+    sendJson(response, result.error ? 400 : 200, result);
+    return true;
+  }
+
+  const voidCode = roomCodeFromPath(url.pathname, "void");
+  if (request.method === "POST" && voidCode) {
+    const body = await readJson(request);
+    const result = store.voidGame(voidCode, body.playerId, body.token);
     sendJson(response, result.error ? 400 : 200, result);
     return true;
   }

@@ -24,10 +24,13 @@ test("admin store seeds six roles and never exposes full keys", () => {
     assert.equal(roles.every((role) => Boolean(role.systemPrompt)), true);
     assert.equal(roles.every((role) => role.portraitUrl.startsWith("/portraits/")), true);
     assert.equal(new Set(roles.map((role) => role.voice)).size, roles.length);
+    assert.equal(roles.every((role) => role.ttsProvider === "doubao"), true);
+    assert.equal(roles.every((role) => /^(zh_|ICL_)/.test(role.voice)), true);
     assert.equal(store.publicTts().narratorVoice, "Sunny");
+    assert.equal(store.adminDoubao().voiceType, "zh_female_cancan_uranus_bigtts");
     const doubaoRole = roles.find((role) => role.name === "豆包");
     assert.equal(doubaoRole.ttsProvider, "doubao");
-    assert.equal(doubaoRole.voice, "BV001_streaming");
+    assert.equal(doubaoRole.voice, "zh_female_vv_uranus_bigtts");
     const token = store.login("temporary-admin-pass");
     assert.ok(token);
     assert.equal(store.authenticate(token), true);
@@ -123,7 +126,7 @@ test("admin configures qwen tts, hides its key, and propagates role voices", () 
     assert.equal(JSON.stringify(store.publicTts()).includes("apiKey"), false);
 
     const role = store.listRoles()[0];
-    store.updateRole(role.id, { voice: "Nofish" });
+    store.updateRole(role.id, { ttsProvider: "qwen", voice: "Nofish" });
     assert.equal(store.adminView(store.getRole(role.id, true)).voice, "Nofish");
     assert.equal(store.publicView(store.getRole(role.id, true)).voice, "Nofish");
 
@@ -169,7 +172,7 @@ test("admin configures doubao classic tts and masks its access token", () => {
     assert.equal(JSON.stringify(publicConfig).includes("accessToken"), false);
     const role = store.listRoles().find((item) => item.name === "豆包");
     assert.equal(role.ttsProvider, "doubao");
-    assert.equal(role.voice, "BV001_streaming");
+    assert.equal(role.voice, "zh_female_vv_uranus_bigtts");
   } finally {
     process.env.ADMIN_PASSWORD = previous;
     fs.rmSync(directory, { recursive: true, force: true });
@@ -237,17 +240,23 @@ test("legacy qwen endpoints and duplicate voices migrate automatically", () => {
     assert.equal(reloaded.getTts().baseUrl, "https://dashscope.aliyuncs.com/api/v1");
     assert.equal(reloaded.getTts().model, "qwen3-tts-flash");
     assert.equal(reloaded.getTts().narratorVoice, "Sunny");
-    assert.equal(reloaded.config.voiceConfigVersion, 4);
+    assert.equal(reloaded.config.voiceConfigVersion, 5);
     const voices = reloaded.listRoles().map((role) => role.voice);
     assert.equal(new Set(voices).size, voices.length);
     const doubaoRole = reloaded.listRoles().find((role) => role.name === "豆包");
     assert.equal(doubaoRole.voice, "zh_female_vv_uranus_bigtts");
     assert.equal(doubaoRole.ttsProvider, "doubao");
+    assert.equal(reloaded.listRoles().every((role) => role.ttsProvider === "doubao"), true);
+    const migratedVoices = reloaded.listRoles().map((role) => role.voice);
+    assert.equal(new Set(migratedVoices).size, migratedVoices.length);
     assert.equal(reloaded.getDoubao().authMode, "apikey");
     assert.equal(reloaded.getDoubao().apiKey, "legacy-api-key-9999");
     assert.equal(reloaded.getDoubao().resourceId, "seed-audio-1.0");
     assert.equal(reloaded.getDoubao().endpoint, "https://openspeech.bytedance.com/api/v3/tts/unidirectional");
-    assert.equal(reloaded.listRoles().find((role) => role.name === "千问").voice, "Jada");
+    assert.equal(
+      reloaded.listRoles().find((role) => role.name === "千问").voice,
+      "zh_female_qingxinnvsheng_uranus_bigtts"
+    );
   } finally {
     process.env.ADMIN_PASSWORD = previous;
     fs.rmSync(directory, { recursive: true, force: true });

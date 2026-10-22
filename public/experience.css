@@ -206,6 +206,26 @@ input, select { min-height: 44px; border-radius: 7px; }
 .side-heading { padding: 17px 16px; min-height: 67px; }
 .side-heading span { font-size: 13px; }
 .side-heading small { font-size: 10px; color: #9b9f89; margin-top: 6px; }
+.side-heading-actions { display: flex; align-items: center; gap: 8px; }
+.void-game-button { min-height: 27px; padding: 0 9px; border: 1px solid #b9665c55; border-radius: 5px; background: #2a1513; color: #d99186; font-family: var(--sans); font-size: 8px; letter-spacing: .04em; cursor: pointer; }
+.void-game-button:hover { border-color: #d47d7088; color: #f0b2a6; }
+.void-game-button:disabled { opacity: .55; cursor: wait; }
+.side-board-tabs { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px; padding: 0 12px 10px; }
+.side-board-tabs button { min-height: 29px; padding: 0 4px; border: 1px solid #9d966e2d; border-radius: 5px; background: #0a120d; color: #8f9782; font-family: var(--sans); font-size: 9px; cursor: pointer; }
+.side-board-tabs button.active { border-color: #c8ae7077; background: #2d291bac; color: #e3ca91; }
+.side-leaderboard { flex: 1; min-height: 0; padding: 0 12px 10px; overflow: auto; scrollbar-width: thin; scrollbar-color: #7c714c55 transparent; }
+.side-leaderboard .board-heading { padding: 0 2px 8px; }
+.side-leaderboard .board-heading strong { font-size: 11px; }
+.side-leaderboard .board-heading small { font-size: 8px; }
+.side-leaderboard .board-row { grid-template-columns: 18px 28px minmax(0, 1fr) auto; gap: 7px; padding: 8px 3px; }
+.side-leaderboard .board-place { font-size: 9px; }
+.side-leaderboard .board-avatar { width: 28px; height: 28px; border-radius: 7px; }
+.side-leaderboard .board-person strong { font-size: 10px; }
+.side-leaderboard .board-person small { overflow: hidden; font-size: 7px; text-overflow: ellipsis; white-space: nowrap; }
+.side-leaderboard .board-value { font-size: 12px; }
+.side-leaderboard .board-empty { padding: 22px 8px; font-size: 9px; }
+.chat-ticker { display: flex; flex-direction: column; gap: 3px; margin: 0 12px 8px; padding: 8px 10px; border: 1px solid #9d966e20; border-radius: 6px; background: #080f0b; color: #aeb39d; font-size: 8px; line-height: 1.5; }
+.chat-ticker b { margin-right: 4px; color: #d8c28b; font-weight: 500; }
 .feed-list { flex: 1; min-height: 0; max-height: none; padding: 0 14px 14px; scrollbar-width: thin; scrollbar-color: #7c714c55 transparent; }
 .feed-item { padding: 10px 0; font-size: 11px; line-height: 1.8; color: #c7c0a9; border-color: #9d966e15; animation: feed-arrive .22s ease-out; }
 .feed-item .feed-meta { color: #8f9782; font-size: 9px; margin-bottom: 4px; }

@@ -415,6 +415,41 @@ class RoomStore {
     return { ok: true };
   }
 
+  voidGame(code, playerId, token) {
+    const room = this.getRoom(code);
+    if (!room) {
+      return { error: "房间不存在。" };
+    }
+    const player = this.authenticatePlayer(code, playerId, token);
+    if (!player || room.hostId !== playerId) {
+      return { error: "只有房主可以提前结束牌局。" };
+    }
+    if (room.phase !== "playing" && room.phase !== "out_challenge") {
+      return { error: "当前没有进行中的牌局。" };
+    }
+    if (room.aiTimer) {
+      clearTimeout(room.aiTimer);
+      room.aiTimer = null;
+    }
+    if (room.turnTimer) {
+      clearTimeout(room.turnTimer);
+      room.turnTimer = null;
+    }
+    if (room.demoRestartTimer) {
+      clearTimeout(room.demoRestartTimer);
+      room.demoRestartTimer = null;
+    }
+    this.clearSpeechGate(room);
+    this.clearCinematicGate(room);
+    const keepPlayerIds = room.players
+      .filter((item) => item.occupied && !item.isAI)
+      .map((item) => item.id);
+    game.prepareRematch(room, { keepPlayerIds });
+    game.addLog(room, "admin", player.name + " 提前结束本局，本局作废且不计入战绩。");
+    this.afterChange(room);
+    return { ok: true };
+  }
+
   leaveRoom(code, playerId, token) {
     const room = this.getRoom(code);
     if (!room) {
@@ -959,6 +994,7 @@ class RoomStore {
           const key = current.id + ":" + role.id;
           if (!this.modelErrors.has(key)) {
             this.modelErrors.set(key, true);
+            console.warn("[ai] " + role.name + " model fallback:", error.message);
             game.addLog(room, "model", role.name + " 暂时没有回应，" + current.name + " 改用本地策略。");
           }
         }

@@ -41,3 +41,27 @@ test("an unauthenticated SSE viewer never receives a player perspective", t => {
   assert.ok(states.length > 0);
   assert.ok(states.every(state => state.me === null && state.isSpectator));
 });
+
+test("host can void an active game without recording a result", t => {
+  const store = makeStore();
+  t.after(() => store.closeAll());
+  const created = store.createRoom({ name: "host" });
+  const joined = store.joinRoom(created.room.code, "guest");
+  const started = game.startGame(created.room, { aiRoles: store.lineupRoles(created.room) });
+  assert.equal(Boolean(started.error), false);
+  assert.equal(created.room.phase, "playing");
+
+  const denied = store.voidGame(created.room.code, joined.playerId, joined.playerToken);
+  assert.match(denied.error, /房主/);
+  assert.equal(created.room.phase, "playing");
+
+  const result = store.voidGame(created.room.code, created.playerId, created.playerToken);
+  assert.equal(result.ok, true);
+  assert.equal(created.room.phase, "lobby");
+  assert.equal(created.room.gameOverRecorded, false);
+  assert.equal(created.room.winnerId, null);
+  assert.equal(created.room.lastReveal, null);
+  assert.equal(created.room.pendingSpeech, null);
+  assert.equal(created.room.pendingCinematic, null);
+  assert.equal(created.room.log.some(entry => entry.text.includes("本局作废")), true);
+});

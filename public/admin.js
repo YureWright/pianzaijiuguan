@@ -609,6 +609,14 @@ function nextAvailableRoleVoice(excludeId) {
   return TTS_VOICE_CATALOG.find((voice) => !used.has(voice.value))?.value || TTS_VOICE_CATALOG[0].value;
 }
 
+function nextAvailableDoubaoVoice(excludeId) {
+  const used = new Set(adminState.roles
+    .filter((role) => role.id !== excludeId && role.ttsProvider === "doubao" && role.voice)
+    .map((role) => role.voice));
+  return DOUBAO_V3_VOICE_CATALOG.find((voice) => !used.has(voice.value))?.value
+    || DOUBAO_V3_VOICE_CATALOG[0].value;
+}
+
 function voiceInfo(value, provider) {
   const catalog = provider === "doubao"
     ? DOUBAO_VOICE_CATALOG.concat(DOUBAO_V3_VOICE_CATALOG)
@@ -715,8 +723,8 @@ function openRoleDialog(role) {
     avatarEmoji: "🎲",
     avatarUrl: "",
     portraitUrl: "",
-    ttsProvider: "qwen",
-    voice: nextAvailableRoleVoice(null),
+    ttsProvider: "doubao",
+    voice: nextAvailableDoubaoVoice(null),
     systemPrompt: "",
     enabled: true,
     hasKey: false,
@@ -731,8 +739,8 @@ function openRoleDialog(role) {
   $("role-provider").value = source.provider || "openai";
   $("role-base-url").value = source.baseUrl || ADMIN_DEFAULTS[source.provider || "openai"];
   $("role-model").value = source.model || "";
-  $("role-tts-provider").value = source.ttsProvider === "doubao" ? "doubao" : "qwen";
-  $("role-voice").value = source.voice || (role ? "" : nextAvailableRoleVoice(null));
+  $("role-tts-provider").value = source.ttsProvider === "qwen" ? "qwen" : "doubao";
+  $("role-voice").value = source.voice || (role ? "" : nextAvailableDoubaoVoice(null));
   setRoleVoiceCatalog($("role-tts-provider").value);
   updateRoleVoiceNote();
   $("role-api-key").value = "";
@@ -860,7 +868,7 @@ async function saveRole() {
     model,
     ttsProvider: $("role-tts-provider").value,
     voice: $("role-voice").value.trim() || ($("role-tts-provider").value === "doubao"
-      ? doubaoDefaultVoice()
+      ? (nextAvailableDoubaoVoice(adminState.editingId) || doubaoDefaultVoice())
       : (nextAvailableRoleVoice(adminState.editingId) || "Cherry")),
     avatarEmoji: $("role-avatar-emoji").value.trim() || "🎲",
     avatarUrl: adminState.avatarUrl,

@@ -31,7 +31,7 @@ const DEFAULT_DOUBAO = {
   apiKey: "",
   resourceId: "seed-tts-2.0",
   cluster: "volcano_tts",
-  voiceType: "BV001_streaming",
+  voiceType: "zh_female_cancan_uranus_bigtts",
   speed: 1,
   format: "mp3"
 };
@@ -40,6 +40,7 @@ const DEFAULT_DOUBAO_API_ENDPOINT = "https://openspeech.bytedance.com/api/v3/tts
 
 const DEFAULT_DOUBAO_VOICE = "BV001_streaming";
 const DEFAULT_DOUBAO_API_VOICE = "zh_female_vv_uranus_bigtts";
+const DEFAULT_DOUBAO_NARRATOR_VOICE = "zh_female_cancan_uranus_bigtts";
 
 const DEFAULT_ROLE_VOICES = {
   DeepSeek: "Ethan",
@@ -48,6 +49,16 @@ const DEFAULT_ROLE_VOICES = {
   Kimi: "Chelsie",
   "豆包": "Dylan",
   "千问": "Jada"
+};
+
+const DEFAULT_ROLE_DOUBAO_VOICES = {
+  DeepSeek: "zh_male_m191_uranus_bigtts",
+  GPT: "zh_male_taocheng_uranus_bigtts",
+  Claude: "zh_female_sophie_uranus_bigtts",
+  Kimi: "zh_female_xiaohe_uranus_bigtts",
+  "豆包": "zh_female_vv_uranus_bigtts",
+  "千问": "zh_female_qingxinnvsheng_uranus_bigtts",
+  Grok: "zh_male_liufei_uranus_bigtts"
 };
 
 const DEFAULT_ROLES = [
@@ -294,6 +305,39 @@ class AdminStore {
         parsed.voiceConfigVersion = 4;
         this.saveConfig(parsed);
       }
+      if (parsed.voiceConfigVersion !== 5) {
+        const fallbackVoices = [
+          "zh_male_m191_uranus_bigtts",
+          "zh_male_taocheng_uranus_bigtts",
+          "zh_female_sophie_uranus_bigtts",
+          "zh_female_xiaohe_uranus_bigtts",
+          "zh_female_vv_uranus_bigtts",
+          "zh_female_qingxinnvsheng_uranus_bigtts",
+          "zh_male_liufei_uranus_bigtts",
+          "zh_female_cancan_uranus_bigtts",
+          "zh_male_wenrouxiaoge_uranus_bigtts",
+          "zh_male_yangguangqingnian_uranus_bigtts"
+        ];
+        const usedVoices = new Set();
+        for (const role of parsed.roles) {
+          role.ttsProvider = "doubao";
+          const preferred = DEFAULT_ROLE_DOUBAO_VOICES[role.name];
+          let voice = String(role.voice || "").trim();
+          if (!/^(zh_|ICL_)/.test(voice) || usedVoices.has(voice)) {
+            voice = preferred && !usedVoices.has(preferred)
+              ? preferred
+              : fallbackVoices.find((item) => !usedVoices.has(item)) || DEFAULT_DOUBAO_API_VOICE;
+          }
+          role.voice = voice;
+          usedVoices.add(voice);
+        }
+        if (!/^(zh_|ICL_)/.test(String(parsed.doubao.voiceType || "")) ||
+            parsed.doubao.voiceType === DEFAULT_DOUBAO_API_VOICE) {
+          parsed.doubao.voiceType = DEFAULT_DOUBAO_NARRATOR_VOICE;
+        }
+        parsed.voiceConfigVersion = 5;
+        this.saveConfig(parsed);
+      }
       return parsed;
     }
     const envPassword = process.env.ADMIN_PASSWORD;
@@ -312,7 +356,7 @@ class AdminStore {
       music: this.defaultMusic(),
       tts: this.defaultTts(),
       doubao: this.defaultDoubao(),
-      voiceConfigVersion: 4,
+      voiceConfigVersion: 5,
       roles: this.defaultRoles()
     };
     this.saveConfig(config);
@@ -330,10 +374,8 @@ class AdminStore {
       avatarEmoji: role.avatarEmoji || "🎲",
       avatarUrl: "",
       portraitUrl: role.portraitUrl,
-      ttsProvider: role.name === "豆包" ? "doubao" : "qwen",
-      voice: role.name === "豆包"
-        ? DEFAULT_DOUBAO_VOICE
-        : (DEFAULT_ROLE_VOICES[role.name] || DEFAULT_TTS.defaultVoice),
+      ttsProvider: "doubao",
+      voice: DEFAULT_ROLE_DOUBAO_VOICES[role.name] || DEFAULT_DOUBAO_API_VOICE,
       systemPrompt: role.systemPrompt,
       enabled: true,
       order: index,
@@ -617,9 +659,11 @@ class AdminStore {
     }
     const ttsProvider = ["qwen", "doubao"].includes(source.ttsProvider)
       ? source.ttsProvider
-      : (base.ttsProvider || (name === "豆包" ? "doubao" : "qwen"));
+      : (base.ttsProvider || "doubao");
     const defaultVoice = ttsProvider === "doubao"
-      ? (this.getDoubao().authMode === "apikey" ? DEFAULT_DOUBAO_API_VOICE : DEFAULT_DOUBAO_VOICE)
+      ? (this.getDoubao().authMode === "apikey"
+        ? (DEFAULT_ROLE_DOUBAO_VOICES[name] || DEFAULT_DOUBAO_API_VOICE)
+        : DEFAULT_DOUBAO_VOICE)
       : (DEFAULT_ROLE_VOICES[name] || DEFAULT_TTS.defaultVoice);
     const voiceFallback = base.ttsProvider === ttsProvider
       ? (base.voice || defaultVoice)
@@ -719,7 +763,7 @@ class AdminStore {
       portraitUrl: role.portraitUrl,
       ttsProvider: role.ttsProvider || (role.name === "豆包" ? "doubao" : "qwen"),
       voice: role.voice || (role.ttsProvider === "doubao"
-        ? DEFAULT_DOUBAO_VOICE
+        ? (DEFAULT_ROLE_DOUBAO_VOICES[role.name] || DEFAULT_DOUBAO_API_VOICE)
         : (DEFAULT_ROLE_VOICES[role.name] || DEFAULT_TTS.defaultVoice)),
       systemPrompt: role.systemPrompt,
       enabled: role.enabled,
@@ -740,7 +784,7 @@ class AdminStore {
       portraitUrl: role.portraitUrl,
       ttsProvider: role.ttsProvider || (role.name === "豆包" ? "doubao" : "qwen"),
       voice: role.voice || (role.ttsProvider === "doubao"
-        ? DEFAULT_DOUBAO_VOICE
+        ? (DEFAULT_ROLE_DOUBAO_VOICES[role.name] || DEFAULT_DOUBAO_API_VOICE)
         : (DEFAULT_ROLE_VOICES[role.name] || DEFAULT_TTS.defaultVoice))
     };
   }

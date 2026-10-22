@@ -6,8 +6,8 @@
   <meta name="theme-color" content="#0a0d0b">
   <title>管理员后台 | 骗子酒馆</title>
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="/styles.css?v=28">
-  <link rel="stylesheet" href="/admin.css?v=28">
+  <link rel="stylesheet" href="/styles.css?v=34">
+  <link rel="stylesheet" href="/admin.css?v=34">
 </head>
 <body class="admin-body">
   <div class="ambient ambient-one"></div>
@@ -59,11 +59,11 @@
       <section class="admin-music-panel admin-tts-panel">
         <div class="admin-music-head">
           <div>
-            <span class="modal-kicker">VOICE ENGINE</span>
-            <strong>千问大模型语音</strong>
-            <p>使用阿里云百炼 Qwen3-TTS 生成旁白与角色语音。每个 AI 拥有独立音色配置。北京地域使用 dashscope.aliyuncs.com，新加坡地域使用 dashscope-intl.aliyuncs.com；语音失败时自动回退浏览器语音。</p>
+            <span class="modal-kicker">VOICE FALLBACK</span>
+            <strong>千问备用语音</strong>
+            <p>仅在豆包合成失败时启用，用于保证牌局不中断。正常对局中所有角色和旁白都优先使用豆包语音。</p>
           </div>
-          <label class="checkbox-row"><input id="tts-enabled" type="checkbox"> 启用大模型语音</label>
+          <label class="checkbox-row"><input id="tts-enabled" type="checkbox"> 启用千问备用语音</label>
         </div>
         <div class="admin-music-grid">
           <label class="wide">接口 URL<input id="tts-base-url" spellcheck="false" placeholder="https://dashscope.aliyuncs.com/api/v1"></label>
@@ -99,9 +99,9 @@
       <section class="admin-music-panel admin-doubao-panel">
         <div class="admin-music-head">
           <div>
-            <span class="modal-kicker">DOUBAO CLASSIC VOICE</span>
-            <strong>豆包经典语音</strong>
-            <p>使用火山引擎豆包经典 TTS。配置 AppID、Access Token 和 Cluster 后，豆包角色将自动使用专属经典音色；其他角色继续使用千问。</p>
+            <span class="modal-kicker">PRIMARY VOICE</span>
+            <strong>豆包主语音</strong>
+            <p>全桌所有 AI 和旁白优先使用火山引擎豆包 TTS。每个角色分配独立音色；千问只在豆包失败时兜底。</p>
           </div>
           <label class="checkbox-row"><input id="doubao-enabled" type="checkbox"> 启用豆包语音</label>
         </div>
@@ -116,7 +116,7 @@
           <label class="doubao-classic-field">Cluster<input id="doubao-cluster" spellcheck="false" placeholder="volcano_tts"></label>
           <label class="doubao-apikey-field">API Key<input id="doubao-api-key" type="password" spellcheck="false" autocomplete="off" placeholder="新版控制台 API Key"><small class="tts-key-status" id="doubao-api-key-status">尚未配置</small></label>
           <label class="doubao-apikey-field">Resource ID<input id="doubao-resource-id" spellcheck="false" placeholder="seed-tts-2.0"><small class="field-note">语音合成 2.0 填 seed-tts-2.0；声音复刻填 seed-icl-2.0。</small></label>
-          <label>默认音色<input id="doubao-voice-type" list="doubao-voice-options" maxlength="80" placeholder="请选择音色目录中的 speaker ID"></label>
+          <label>旁白音色<input id="doubao-voice-type" list="doubao-voice-options" maxlength="80" placeholder="请选择音色目录中的 speaker ID"></label>
           <label>语速<input id="doubao-speed" type="number" min="0.5" max="2" step="0.05" value="1"></label>
           <label>音频格式<select id="doubao-format">
             <option value="mp3">MP3</option>
@@ -210,8 +210,8 @@
         <label class="wide">接口 URL<input id="role-base-url" spellcheck="false" placeholder="https://api.deepseek.com/v1"></label>
         <label>模型名称<input id="role-model" spellcheck="false" placeholder="deepseek-chat"></label>
         <label>语音引擎<select id="role-tts-provider">
-          <option value="qwen">千问 Qwen3-TTS</option>
-          <option value="doubao">豆包经典 TTS</option>
+          <option value="doubao">豆包 TTS（主语音）</option>
+          <option value="qwen">千问 TTS（备用）</option>
         </select></label>
         <div class="role-voice-field wide">
           <label for="role-voice">语音音色</label>
@@ -258,6 +258,6 @@
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
   <datalist id="tts-voice-options"></datalist>
   <datalist id="doubao-voice-options"></datalist>
-  <script src="/admin.js?v=28" defer></script>
+  <script src="/admin.js?v=34" defer></script>
 </body>
 </html>

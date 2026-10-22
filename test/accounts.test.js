@@ -86,9 +86,13 @@ test("usernames are unique across locations and a death forces a rename", () => 
     assert.match(store.setUsername(shanghai.token, "阿青").error, /必须更换/);
     assert.equal(store.setUsername(shanghai.token, "阿青二号").ok, true);
     assert.equal(store.byId("shanghai").pendingRename, false);
+    assert.equal(store.byId("shanghai").stats.gamesPlayed, 0);
 
     const board = store.leaderboard([{ id: "ai-deepseek", name: "DeepSeek" }]);
-    assert.equal(board.users.find((item) => item.id === "shanghai").kills, 3);
+    assert.equal(board.users.find((item) => item.username === "阿青").kills, 3);
+    assert.equal(board.users.find((item) => item.username === "阿青").displayName, "阿青");
+    assert.equal(board.users.find((item) => item.username === "阿青二号").kills, 0);
+    assert.equal(board.users.some((item) => item.displayName.includes("上海")), false);
     assert.equal(board.ai[0].games, 1);
     assert.equal(board.ai[0].wins, 0);
     assert.equal(board.ai[0].winRate, 0);
@@ -97,7 +101,7 @@ test("usernames are unique across locations and a death forces a rename", () => 
     assert.equal(store.byId("shanghai").username, "");
     assert.equal(store.byId("shanghai").stats.gamesPlayed, 0);
     assert.equal(store.byId("hangzhou").username, "");
-    assert.deepEqual(store.leaderboard([{ id: "ai-deepseek", name: "DeepSeek" }]).users.map((item) => item.username), ["", ""]);
+    assert.deepEqual(store.leaderboard([{ id: "ai-deepseek", name: "DeepSeek" }]).users, []);
   } finally {
     fs.rmSync(dataDir, { recursive: true, force: true });
   }

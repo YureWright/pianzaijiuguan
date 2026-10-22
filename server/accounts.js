@@ -44,6 +44,27 @@ function normalizeUsername(value) {
   return text;
 }
 
+function cloneStats(stats) {
+  return Object.assign(newStats(), stats || {});
+}
+
+function findUsernameStatsKey(account, username) {
+  const target = String(username || "").toLowerCase();
+  return Object.keys(account.usernameStats || {}).find((key) => key.toLowerCase() === target) || "";
+}
+
+function ensureUsernameStats(account, username) {
+  if (!account.usernameStats || typeof account.usernameStats !== "object") {
+    account.usernameStats = {};
+  }
+  const existingKey = findUsernameStatsKey(account, username);
+  if (existingKey) {
+    return account.usernameStats[existingKey];
+  }
+  account.usernameStats[username] = newStats();
+  return account.usernameStats[username];
+}
+
 class AccountStore {
   constructor(options) {
     const opts = options || {};
@@ -74,6 +95,14 @@ class AccountStore {
             changed = true;
           }
         }
+        if (!account.usernameStats || typeof account.usernameStats !== "object") {
+          account.usernameStats = {};
+          changed = true;
+        }
+        if (account.username && !findUsernameStatsKey(account, account.username)) {
+          account.usernameStats[account.username] = cloneStats(account.stats);
+          changed = true;
+        }
       }
       if (!parsed.aiStats || typeof parsed.aiStats !== "object") {
         parsed.aiStats = {};
@@ -102,6 +131,7 @@ class AccountStore {
         keySalt: salt,
         keyHash: hashKey(key, salt),
         username: "",
+        usernameStats: {},
         pendingRename: false,
         stats: newStats(),
         createdAt: Date.now(),
@@ -205,10 +235,13 @@ class AccountStore {
     }
     const duplicate = Object.values(this.config.accounts).find((item) =>
       item.id !== account.id && item.username && item.username.toLowerCase() === username.toLowerCase());
-    if (duplicate) {
+    const duplicateHistory = Object.values(this.config.accounts).some((item) =>
+      item.id !== account.id && Boolean(findUsernameStatsKey(item, username)));
+    if (duplicate || duplicateHistory) {
       return { error: "这个用户名已经被另一个地点的玩家使用。" };
     }
     account.username = username;
+    account.stats = cloneStats(ensureUsernameStats(account, username));
     account.pendingRename = false;
     account.updatedAt = Date.now();
     this.save();
@@ -241,22 +274,28 @@ class AccountStore {
         continue;
       }
       const won = winnerId === player.id;
-      account.stats.gamesPlayed += 1;
+      const username = account.username;
+      if (!username) {
+        continue;
+      }
+      const stats = ensureUsernameStats(account, username);
+      stats.gamesPlayed += 1;
       if (won) {
-        account.stats.wins += 1;
-        account.stats.currentStreak += 1;
-        account.stats.bestStreak = Math.max(account.stats.bestStreak, account.stats.currentStreak);
+        stats.wins += 1;
+        stats.currentStreak += 1;
+        stats.bestStreak = Math.max(stats.bestStreak, stats.currentStreak);
       } else {
-        account.stats.currentStreak = 0;
+        stats.currentStreak = 0;
       }
       if (!player.alive) {
-        account.stats.deaths += 1;
+        stats.deaths += 1;
         account.pendingRename = true;
       }
       const match = player.matchStats || {};
-      account.stats.deceptions += Number(match.deceptions || 0);
-      account.stats.challengeKills += Number(match.challengeKills || 0);
-      account.stats.failedChallengeKills += Number(match.failedChallengeKills || 0);
+      stats.deceptions += Number(match.deceptions || 0);
+      stats.challengeKills += Number(match.challengeKills || 0);
+      stats.failedChallengeKills += Number(match.failedChallengeKills || 0);
+      account.stats = cloneStats(stats);
       account.lastResult = won ? "win" : "loss";
       account.lastPlayedAt = Date.now();
       account.updatedAt = Date.now();
@@ -266,23 +305,27 @@ class AccountStore {
   }
 
   leaderboard(enabledRoles) {
-    const users = Object.values(this.config.accounts).map((account) => {
-      const view = this.publicAccount(account);
-      return {
-        id: view.id,
-        location: view.location,
-        username: view.username,
-        displayName: view.displayName,
-        deception: view.stats.deceptions,
-        challengeKills: view.stats.challengeKills,
-        failedChallengeKills: view.stats.failedChallengeKills,
-        kills: view.stats.challengeKills + view.stats.failedChallengeKills,
-        bestStreak: view.stats.bestStreak,
-        currentStreak: view.stats.currentStreak,
-        wins: view.stats.wins,
-        gamesPlayed: view.stats.gamesPlayed
-      };
-    });
+    const users = [];
+    for (const account of Object.values(this.config.accounts)) {
+      for (const [username, rawStats] of Object.entries(account.usernameStats || {})) {
+        const stats = cloneStats(rawStats);
+        users.push({
+          id: username,
+          accountId: account.id,
+          location: account.location,
+          username,
+          displayName: username,
+          deception: stats.deceptions,
+          challengeKills: stats.challengeKills,
+          failedChallengeKills: stats.failedChallengeKills,
+          kills: stats.challengeKills + stats.failedChallengeKills,
+          bestStreak: stats.bestStreak,
+          currentStreak: stats.currentStreak,
+          wins: stats.wins,
+          gamesPlayed: stats.gamesPlayed
+        });
+      }
+    }
     const roles = Array.isArray(enabledRoles) ? enabledRoles : [];
     const seen = new Set();
     const ai = [];
@@ -320,6 +363,7 @@ class AccountStore {
   resetAll() {
     for (const account of Object.values(this.config.accounts)) {
       account.username = "";
+      account.usernameStats = {};
       account.pendingRename = false;
       account.stats = newStats();
       account.lastResult = null;

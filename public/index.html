@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#0a0d0b">
   <title>骗子酒馆 | LIARS BAR</title>
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="/styles.css?v=28">
+  <link rel="stylesheet" href="/styles.css?v=34">
   <link rel="stylesheet" href="/experience.css?v=1">
   <link rel="preload" as="image" href="/assets/tavern.webp" fetchpriority="high">
   <link rel="prefetch" as="image" href="/assets/revolver.webp">
@@ -163,12 +163,22 @@
         <aside class="side-panel" id="side-panel">
           <div class="side-heading">
             <div>
-              <span>酒馆实录</span>
-              <small id="round-label">等待开局</small>
+              <span>排行榜</span>
+              <small id="round-label">实时战绩</small>
             </div>
-            <span class="live-dot"></span>
+            <div class="side-heading-actions">
+              <span class="live-dot"></span>
+              <button class="void-game-button" id="void-game-button" type="button" hidden>作废本局</button>
+            </div>
           </div>
-          <div id="feed-list" class="feed-list"></div>
+          <div class="side-board-tabs" id="side-board-tabs" role="tablist" aria-label="排行榜分类">
+            <button type="button" data-side-board="deception">欺骗</button>
+            <button type="button" data-side-board="kills">击杀</button>
+            <button type="button" data-side-board="streak">连胜</button>
+            <button type="button" data-side-board="ai">AI</button>
+          </div>
+          <div id="side-leaderboard" class="side-leaderboard"></div>
+          <div id="chat-ticker" class="chat-ticker" hidden></div>
           <form id="chat-form" class="chat-form">
             <input id="chat-input" maxlength="100" autocomplete="off" placeholder="说点什么...">
             <button type="submit" aria-label="发送">↑</button>
@@ -282,6 +292,6 @@
   <audio id="bgm-audio" loop preload="none"></audio>
 
   <script src="/experience.js?v=1" defer></script>
-  <script src="/app.js?v=28" defer></script>
+  <script src="/app.js?v=34" defer></script>
 </body>
 </html>

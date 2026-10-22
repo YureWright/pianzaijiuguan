@@ -89,7 +89,8 @@ function buildPrompt(context) {
     "speech 是你当场说给所有人听的公开喊话：要挑衅、自信、拉拢或转移注意力，让其他人相信你；不能暴露自己的手牌或真实推理。",
     "monologue 是你的私人想法，只会在牌局结束后展示；可以分析自己的手牌、概率和真实计划。",
     "你的目标是在不中弹的情况下让其他玩家出局。",
-    "只输出一个 JSON 对象，不要 Markdown，不要解释 JSON 之外的内容。"
+    "只输出一个 JSON 对象，不要 Markdown，不要解释 JSON 之外的内容。",
+    "控制输出长度：speech 不超过 40 字，reasoning 不超过 60 字，monologue 不超过 90 字；不要展开长篇推理或重复牌桌信息。"
   ].join("\n");
   const adminPrompt = context.systemPrompt
     ? "\n管理员为这个角色设定的额外提示词：\n" + String(context.systemPrompt).slice(0, 4000)
@@ -206,18 +207,22 @@ async function callOpenAI(profile, prompt, signal) {
   if (profile.apiKey) {
     headers.Authorization = "Bearer " + profile.apiKey;
   }
+  const payload = {
+    model: profile.model,
+    messages: [
+      { role: "system", content: prompt.system },
+      { role: "user", content: prompt.user }
+    ],
+    temperature: 0.8
+  };
+  if (/volces\.com/i.test(String(profile.baseUrl || ""))) {
+    payload.thinking = { type: "disabled" };
+  }
   const response = await fetch(endpointFor(profile), {
     method: "POST",
     headers,
     signal,
-    body: JSON.stringify({
-      model: profile.model,
-      messages: [
-        { role: "system", content: prompt.system },
-        { role: "user", content: prompt.user }
-      ],
-      temperature: 0.8
-    })
+    body: JSON.stringify(payload)
   });
   if (!response.ok) {
     throw await providerError("OpenAI 兼容接口", response);
@@ -239,7 +244,7 @@ async function callAnthropic(profile, prompt, signal) {
     signal,
     body: JSON.stringify({
       model: profile.model,
-      max_tokens: 400,
+      max_tokens: 4096,
       temperature: 0.8,
       system: prompt.system,
       messages: [{ role: "user", content: prompt.user }]
@@ -261,7 +266,7 @@ async function callGemini(profile, prompt, signal) {
     body: JSON.stringify({
       systemInstruction: { parts: [{ text: prompt.system }] },
       contents: [{ role: "user", parts: [{ text: prompt.user }] }],
-      generationConfig: { temperature: 0.8, maxOutputTokens: 400 }
+      generationConfig: { temperature: 0.8 }
     })
   });
   if (!response.ok) {

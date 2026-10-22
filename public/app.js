@@ -22,6 +22,10 @@ const app = {
   pendingEnterAfterName: false,
   leaderboardData: null,
   leaderboardTab: "deception",
+  leaderboardFetchedAt: 0,
+  leaderboardLoading: false,
+  leaderboardPromise: null,
+  leaderboardGameoverKey: "",
   roomCode: null,
   playerId: null,
   playerToken: null,
@@ -32,6 +36,7 @@ const app = {
   handSorted: false,
   actionPending: false,
   actionRequestId: 0,
+  voidingGame: false,
   connected: false,
   serverOffset: 0,
   profiles: [],
@@ -385,22 +390,56 @@ async function openLeaderboard() {
   openDialog("leaderboard-dialog");
   $("leaderboard-body").textContent = "正在读取排行榜...";
   try {
-    app.leaderboardData = await apiRequest("/api/leaderboard");
-    renderLeaderboard();
+    await fetchLeaderboard(true);
   } catch (error) {
     $("leaderboard-body").innerHTML = "<div class=\"board-empty\">排行榜读取失败：" + escapeHtml(error.message) + "</div>";
   }
 }
 
-function renderLeaderboard() {
-  const body = $("leaderboard-body");
-  const data = app.leaderboardData;
-  if (!data) {
-    body.innerHTML = "<div class=\"board-empty\">暂无排行榜数据。</div>";
+async function fetchLeaderboard(force) {
+  if (app.leaderboardLoading && app.leaderboardPromise) {
+    return app.leaderboardPromise;
+  }
+  if (!force && app.leaderboardData && Date.now() - app.leaderboardFetchedAt < 15000) {
+    renderLeaderboard();
+    return app.leaderboardData;
+  }
+  app.leaderboardLoading = true;
+  app.leaderboardPromise = apiRequest("/api/leaderboard").then((data) => {
+    app.leaderboardData = data;
+    app.leaderboardFetchedAt = Date.now();
+    renderLeaderboard();
+    return data;
+  }).finally(() => {
+    app.leaderboardLoading = false;
+    app.leaderboardPromise = null;
+  });
+  return app.leaderboardPromise;
+}
+
+async function ensureSideLeaderboard(force) {
+  const panel = $("side-leaderboard");
+  if (!panel) {
     return;
   }
+  if (!app.leaderboardData) {
+    panel.innerHTML = "<div class=\"board-empty\">正在读取排行榜...</div>";
+  }
+  try {
+    await fetchLeaderboard(Boolean(force));
+  } catch (error) {
+    if (!app.leaderboardData) {
+      panel.innerHTML = "<div class=\"board-empty\">排行榜读取失败</div>";
+    }
+  }
+}
+
+function leaderboardView(data) {
   document.querySelectorAll("[data-board]").forEach((button) => {
     button.classList.toggle("active", button.getAttribute("data-board") === app.leaderboardTab);
+  });
+  document.querySelectorAll("[data-side-board]").forEach((button) => {
+    button.classList.toggle("active", button.getAttribute("data-side-board") === app.leaderboardTab);
   });
   if (app.leaderboardTab === "ai") {
     const rows = (data.ai || []).map((entry, index) => ({
@@ -409,8 +448,7 @@ function renderLeaderboard() {
       detail: entry.wins + " 胜 / " + entry.games + " 局",
       avatar: entry.portraitUrl || entry.avatarUrl || ""
     }));
-    body.innerHTML = boardMarkup(rows, "AI 胜率", "胜率相同按胜场排序");
-    return;
+    return { rows, title: "AI 胜率", detail: "胜率相同按胜场排序" };
   }
   const users = (data.users || []).slice();
   let rows;
@@ -444,7 +482,22 @@ function renderLeaderboard() {
       detail: "累计胜场 " + (entry.wins || 0) + " · 参赛 " + (entry.gamesPlayed || 0) + " 局"
     }));
   }
-  body.innerHTML = boardMarkup(rows, title, detail);
+  return { rows, title, detail };
+}
+
+function renderLeaderboard() {
+  const body = $("leaderboard-body");
+  const side = $("side-leaderboard");
+  const data = app.leaderboardData;
+  if (!data) {
+    if (body) body.innerHTML = "<div class=\"board-empty\">暂无排行榜数据。</div>";
+    if (side) side.innerHTML = "<div class=\"board-empty\">暂无排行榜数据。</div>";
+    return;
+  }
+  const view = leaderboardView(data);
+  const markup = boardMarkup(view.rows, view.title, view.detail);
+  if (body) body.innerHTML = markup;
+  if (side) side.innerHTML = markup;
 }
 
 function boardMarkup(rows, title, detail) {
@@ -667,6 +720,18 @@ function wireDialogs() {
     }
     app.leaderboardTab = button.getAttribute("data-board");
     renderLeaderboard();
+  });
+  $("side-board-tabs").addEventListener("click", (event) => {
+    const button = event.target.closest("[data-side-board]");
+    if (!button) {
+      return;
+    }
+    app.leaderboardTab = button.getAttribute("data-side-board");
+    if (app.leaderboardData) {
+      renderLeaderboard();
+    } else {
+      ensureSideLeaderboard(true);
+    }
   });
   document.querySelectorAll("[data-close-dialog]").forEach((button) => {
     button.addEventListener("click", () => {
@@ -1011,6 +1076,9 @@ function handleState(state) {
   const previous = app.room;
   const isFirst = !previous;
   const previousPhase = previous ? previous.phase : null;
+  if (previous && ["playing", "out_challenge"].includes(previous.phase) && state.phase === "lobby") {
+    resetAfterVoid();
+  }
   app.room = state;
   app.roomCode = state.code;
   app.serverOffset = (state.serverTime || Date.now()) - Date.now();
@@ -1782,6 +1850,7 @@ function renderRoom() {
   renderHand(state);
   renderActionBar(state);
   renderFeed(state);
+  updateVoidGameButton(state);
   updateTurnClock();
   updateCameraUi();
 }
@@ -2113,6 +2182,35 @@ function renderActionBar(state) {
   ].join(""));
 }
 
+async function voidCurrentGame() {
+  if (app.voidingGame || !app.room || !app.playerToken) {
+    return;
+  }
+  if (!window.confirm("提前结束本局？本局将作废，不计入任何人的胜负、击杀、连胜或死亡记录。")) {
+    return;
+  }
+  app.voidingGame = true;
+  updateVoidGameButton(app.room);
+  try {
+    await apiRequest("/api/rooms/" + encodeURIComponent(app.roomCode) + "/void", {
+      method: "POST",
+      body: {
+        playerId: app.playerId,
+        token: app.playerToken
+      }
+    });
+    resetAfterVoid();
+    showToast("本局已作废，不计入战绩。");
+  } catch (error) {
+    showToast(error.message, true);
+  } finally {
+    app.voidingGame = false;
+    if (app.room) {
+      updateVoidGameButton(app.room);
+    }
+  }
+}
+
 function renderLineup(state) {
   const panel = $("lineup-panel");
   if (state.phase !== "lobby") {
@@ -2158,31 +2256,21 @@ function renderLineup(state) {
 }
 
 function renderFeed(state) {
-  const feed = $("feed-list");
-  const nearBottom = feed.scrollHeight - feed.scrollTop - feed.clientHeight < 80;
-  const items = [];
-  for (const entry of state.log) {
-    items.push({ at: entry.at, type: entry.type, text: entry.text, meta: "牌桌" });
+  const gameover = state.log.slice().reverse().find((entry) => entry.type === "gameover");
+  const gameoverKey = gameover ? gameover.id : "";
+  if (gameoverKey && gameoverKey !== app.leaderboardGameoverKey) {
+    app.leaderboardGameoverKey = gameoverKey;
+    ensureSideLeaderboard(true);
+  } else {
+    ensureSideLeaderboard(false);
   }
-  for (const entry of state.chat) {
-    items.push({
-      at: entry.at,
-      type: entry.kind === "speech" ? "chat" : "chat",
-      text: entry.name + "：" + entry.text,
-      meta: entry.kind === "speech" ? "牌桌发言" : "聊天"
-    });
-  }
-  items.sort((left, right) => left.at - right.at);
-  experience.render(feed, items.slice(-60).map((item) => {
-    return [
-      "<div class=\"feed-item type-" + escapeHtml(item.type) + "\">",
-      "  <span class=\"feed-meta\">" + formatTime(item.at) + " · " + escapeHtml(item.meta) + "</span>",
-      "  " + escapeHtml(item.text),
-      "</div>"
-    ].join("");
-  }).join(""));
-  if (nearBottom) {
-    feed.scrollTop = feed.scrollHeight;
+  const ticker = $("chat-ticker");
+  if (ticker) {
+    const recent = state.chat.slice(-2);
+    ticker.hidden = recent.length === 0;
+    ticker.innerHTML = recent.map((entry) => {
+      return "<span><b>" + escapeHtml(entry.name) + "</b> " + escapeHtml(entry.text) + "</span>";
+    }).join("");
   }
   const lastChat = state.chat.length > 0 ? state.chat[state.chat.length - 1] : null;
   if (lastChat && lastChat.id !== app.lastChatKey) {
@@ -2349,6 +2437,8 @@ function wireRoomEvents() {
       input.value = text;
     }
   });
+
+  $("void-game-button").addEventListener("click", voidCurrentGame);
 
   $("leave-button").addEventListener("click", () => {
     leaveRoom(false);
@@ -3022,6 +3112,42 @@ function narrateFx(event) {
   if (narration) {
     speak(narration.text, narration.emotion, narration.roleName);
   }
+}
+
+function updateVoidGameButton(state) {
+  const button = $("void-game-button");
+  if (!button) {
+    return;
+  }
+  const active = Boolean(state && ["playing", "out_challenge"].includes(state.phase) &&
+    state.hostId && state.hostId === app.playerId);
+  button.hidden = !active;
+  button.disabled = app.voidingGame;
+}
+
+function resetAfterVoid() {
+  app.fxGeneration += 1;
+  app.animationQueue = [];
+  app.fxAnimating = false;
+  app.selected.clear();
+  resetVoiceRuntime();
+  const overlay = $("table-fx");
+  if (overlay) {
+    overlay.className = "table-fx";
+    overlay.innerHTML = "";
+    overlay.setAttribute("aria-hidden", "true");
+  }
+  const layer = $("table-effect-layer");
+  if (layer) {
+    layer.innerHTML = "";
+  }
+  const stage = $("table-stage");
+  if (stage) {
+    stage.classList.remove("cards-in-flight", "reveal-active");
+  }
+  document.querySelectorAll(".action-flash, .action-shot").forEach((element) => {
+    element.classList.remove("action-flash", "action-shot");
+  });
 }
 
 function buildRecap() {

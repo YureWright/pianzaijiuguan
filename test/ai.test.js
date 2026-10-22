@@ -47,6 +47,7 @@ test("admin system prompts and memories are merged into model prompts", () => {
   const prompt = ai.buildPrompt(context());
   assert.equal(prompt.system.includes("CUSTOM_ADMIN_PROMPT_123"), true);
   assert.equal(prompt.user.includes("上一轮对手撒过一次谎"), true);
+  assert.equal(prompt.system.includes("speech 不超过 40 字"), true);
 });
 
 test("model adapters support OpenAI-compatible, Anthropic and Gemini payloads", async () => {
@@ -112,6 +113,31 @@ test("model adapters support OpenAI-compatible, Anthropic and Gemini payloads", 
   assert.equal(seen.some((entry) => entry.authorization === "Bearer openai-key"), true);
   assert.equal(seen.some((entry) => entry.anthropicKey === "anthropic-key"), true);
   assert.equal(seen.some((entry) => entry.url.includes("key=gemini-key")), true);
+});
+
+test("ark doubao requests disable deep thinking for low-latency game decisions", async () => {
+  const originalFetch = global.fetch;
+  let captured = null;
+  global.fetch = async (url, options) => {
+    captured = { url: String(url), body: JSON.parse(options.body) };
+    return new Response(JSON.stringify({ choices: [{ message: { content: "OK" } }] }), {
+      status: 200,
+      headers: { "content-type": "application/json" }
+    });
+  };
+  try {
+    const result = await ai.testConnection({
+      provider: "openai",
+      baseUrl: "https://ark.cn-beijing.volces.com/api/v3",
+      model: "doubao-seed-test",
+      apiKey: "test-key"
+    }, { timeoutMs: 5000 });
+    assert.equal(result.response, "OK");
+    assert.equal(captured.body.thinking.type, "disabled");
+    assert.equal(Object.prototype.hasOwnProperty.call(captured.body, "max_tokens"), false);
+  } finally {
+    global.fetch = originalFetch;
+  }
 });
 
 test("model JSON parsing accepts fenced output and rejects illegal cards", () => {
