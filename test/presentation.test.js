@@ -76,3 +76,54 @@ test("host can void an active game without recording a result", t => {
   assert.equal(created.room.pendingCinematic, null);
   assert.equal(created.room.log.some(entry => entry.text.includes("本局作废")), true);
 });
+
+test("chat and reconnect preserve a human deadline while a new turn gets a fresh clock", t => {
+  const store = makeStore();
+  t.after(() => store.closeAll());
+  const first = store.createRoom({ name: "first" });
+  const second = store.joinRoom(first.room.code, "second");
+  const room = first.room;
+  game.startGame(room, { starterSeat: 0, rng: () => 0.42 });
+  let now = Date.now();
+  t.mock.method(Date, "now", () => now);
+  store.afterChange(room);
+  const deadline = room.turnDeadline;
+  const timer = room.turnTimer;
+  now += 5000;
+  store.sendChat(room.code, second.playerId, second.playerToken, "Still thinking");
+  assert.equal(room.turnDeadline, deadline);
+  assert.equal(room.turnTimer, timer);
+  store.subscribe(room.code, first.playerId, first.playerId, first.playerToken, { write() {}, on() {} });
+  assert.equal(room.turnDeadline, deadline);
+  assert.equal(room.turnTimer, timer);
+  const player = game.findPlayer(room, first.playerId);
+  assert.equal(store.performAction(room.code, first.playerId, first.playerToken,
+    { type: "play", cardIds: [player.hand[0].id] }).ok, true);
+  assert.equal(room.turnPlayerId, second.playerId);
+  assert.equal(room.turnDeadline, now + 30000);
+  store.closeAll();
+  assert.equal(room.turnTimer, null);
+});
+
+test("an automatic forced challenge waits for the same cinematic acknowledgements as a click", t => {
+  const store = makeStore();
+  t.after(() => store.closeAll());
+  const first = store.createRoom({ name: "first" });
+  const second = store.joinRoom(first.room.code, "second");
+  const room = first.room;
+  game.startGame(room, { starterSeat: 0, rng: () => 0.42 });
+  const player = game.findPlayer(room, first.playerId);
+  const challenger = game.findPlayer(room, second.playerId);
+  for (const ai of room.players.filter(seat => seat.isAI)) { ai.alive = false; ai.hand = []; }
+  challenger.hand = [];
+  challenger.gun = { chamber: 0, bullet: 2 };
+  player.hand = [{ id: "truth", rank: "J" }, { id: "keep", rank: "Q" }];
+  room.tableRank = "J";
+  game.performAction(room, player.id, { type: "play", cardIds: ["truth"] });
+  assert.equal(room.phase, "out_challenge");
+  store.afterChange(room);
+  store.autoAct(room, challenger.id, room.turnClockKey);
+  assert.equal(room.lastReveal.truthful, true);
+  assert.equal(room.turnGateReason, "cinematic");
+  assert.ok(room.pendingCinematic);
+});

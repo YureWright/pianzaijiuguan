@@ -883,22 +883,20 @@ class RoomStore {
   }
 
   scheduleTurnTimeout(room) {
+    const active = room.phase === "playing" || room.phase === "out_challenge";
+    const player = active ? game.findPlayer(room, room.turnPlayerId) : null;
+    const key = player ? [room.round, room.phase, player.id, room.lastPlay ? room.lastPlay.at : "",
+      room.lastReveal ? room.lastReveal.id : "", room.turnGateUntil || 0].join(":") : null;
+    if (player && !player.isAI && !player.autopilot && room.turnClockKey === key && room.turnTimer) {
+      return;
+    }
     if (room.turnTimer) {
       clearTimeout(room.turnTimer);
       room.turnTimer = null;
     }
-    if (room.phase !== "playing" && room.phase !== "out_challenge") {
-      room.turnDeadline = null;
-      room.turnClockKey = null;
-      return;
-    }
-    const player = game.findPlayer(room, room.turnPlayerId);
     if (!player) {
       room.turnDeadline = null;
-      return;
-    }
-    const key = room.round + ":" + room.phase + ":" + player.id + ":" + Math.floor((room.turnGateUntil || 0) / 1000);
-    if (room.turnClockKey === key && (room.turnTimer || player.isAI || player.autopilot)) {
+      room.turnClockKey = null;
       return;
     }
     room.turnClockKey = key;
@@ -945,6 +943,9 @@ class RoomStore {
       game.addLog(room, "error", "自动行动失败：" + result.error);
       this.broadcast(room);
       return;
+    }
+    if (result.reveal) {
+      this.setCinematicGate(room);
     }
     this.afterChange(room);
   }
@@ -1183,6 +1184,10 @@ class RoomStore {
     }
     this.disconnectTimers.clear();
     for (const room of this.rooms.values()) {
+      if (room.turnTimer) {
+        clearTimeout(room.turnTimer);
+        room.turnTimer = null;
+      }
       if (room.aiTimer) {
         clearTimeout(room.aiTimer);
       }
